@@ -178,9 +178,10 @@ async function start() {
   await Leaderboard.init(supabase);
   Lobby.init(broadcastAll, sendToClient, disconnectClient);
 
-  const port = config.PORT;
-  server.listen(port, () => {
-    console.log(`The Hangar is running on http://localhost:${port}`);
+  const port = process.env.PORT || 3000;
+  const host = '0.0.0.0';
+  server.listen(port, host, () => {
+    console.log(`The Hangar is running on http://${host}:${port}`);
   });
 }
 

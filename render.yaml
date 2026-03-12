@@ -3,11 +3,15 @@ services:
     name: the-hangar
     runtime: node
     plan: free
+    numInstances: 1
     buildCommand: npm install
     startCommand: node server.js
+    healthCheckPath: /api/info
     envVars:
       - key: NODE_ENV
         value: production
+      - key: NODE_VERSION
+        value: 20.11.0
       - key: SUPABASE_URL
         sync: false
       - key: SUPABASE_ANON_KEY
