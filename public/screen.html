@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>The Hangar — Big Screen</title>
+<style>
+:root {
+  --bg: #0a0c10; --surface: #141722; --border: rgba(255,255,255,.08);
+  --text: #e8eaed; --muted: #6b7080; --accent: #5b7fff;
+  --green: #4ade80; --red: #f87171; --amber: #fbbf24;
+  --purple: #a78bfa; --orange: #fb923c;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:var(--bg);color:var(--text);height:100vh;overflow:hidden;display:flex;flex-direction:column}
+header{display:flex;align-items:center;justify-content:space-between;padding:24px 40px;flex-shrink:0}
+.title{font-size:1.6rem;font-weight:800;letter-spacing:-.02em;background:linear-gradient(135deg,#fff 30%,var(--accent));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+.header-right{display:flex;align-items:center;gap:20px}
+.qr-corner{border-radius:12px;overflow:hidden;background:#fff;padding:8px}
+.qr-corner canvas{display:block}
+.server-info{text-align:right;font-size:.9rem;color:var(--muted)}
+.server-info .ip{font-size:1.1rem;color:var(--text);font-weight:600}
+
+main{flex:1;display:flex;align-items:center;justify-content:center;padding:0 40px 40px}
+.no-games{text-align:center;color:var(--muted);font-size:1.4rem}
+.no-games p{margin-top:8px;font-size:1rem}
+
+.room-display{width:100%;max-width:1100px;background:var(--surface);border:1px solid var(--border);border-radius:20px;padding:40px;display:none}
+.room-display.active{display:block;animation:fadeIn .4s ease-out}
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
+
+.room-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:24px}
+.room-name{font-size:2rem;font-weight:800}
+.game-badge{font-size:1rem;padding:6px 16px;border-radius:12px;font-weight:700;text-transform:uppercase;letter-spacing:.04em}
+.game-badge.mafia{background:rgba(248,113,113,.12);color:var(--red)}
+.game-badge.spyfall{background:rgba(167,139,250,.12);color:var(--purple)}
+.game-badge.secrethitler{background:rgba(251,146,60,.12);color:var(--orange)}
+.game-badge.liarsdice{background:rgba(251,191,36,.12);color:var(--amber)}
+
+.phase-display{text-align:center;margin:20px 0}
+.phase-name{font-size:2.4rem;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:var(--accent)}
+.timer-big{font-size:5rem;font-weight:800;font-variant-numeric:tabular-nums}
+.timer-big.warn{color:var(--amber)}
+.timer-big.danger{color:var(--red)}
+
+.players-row{display:flex;flex-wrap:wrap;gap:12px;justify-content:center;margin:20px 0}
+.screen-player{display:flex;flex-direction:column;align-items:center;gap:6px;padding:16px 20px;background:rgba(255,255,255,.03);border:1px solid var(--border);border-radius:14px;min-width:100px}
+.screen-player.dead{opacity:.3}
+.screen-player.dead .sp-name{text-decoration:line-through}
+.sp-avatar{width:48px;height:48px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:1rem;font-weight:700;color:#fff}
+.sp-name{font-size:1.1rem;font-weight:600}
+.sp-role{font-size:.8rem;padding:2px 8px;border-radius:8px;font-weight:600}
+
+.result-text{text-align:center;font-size:1.8rem;font-weight:700;margin:16px 0}
+.result-text.win-green{color:var(--green)}
+.result-text.win-red{color:var(--red)}
+
+.policy-track-big{display:flex;gap:8px;justify-content:center;margin:12px 0}
+.policy-slot-big{width:48px;height:64px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:1.2rem;font-weight:700;border:2px solid var(--border)}
+.policy-slot-big.liberal{border-color:var(--accent)}
+.policy-slot-big.liberal.enacted{background:var(--accent);color:#fff}
+.policy-slot-big.fascist{border-color:var(--orange)}
+.policy-slot-big.fascist.enacted{background:var(--orange);color:#fff}
+
+.room-dots{display:flex;justify-content:center;gap:8px;margin-top:20px}
+.room-dot{width:10px;height:10px;border-radius:50%;background:var(--muted);opacity:.4;transition:all .3s}
+.room-dot.active{background:var(--accent);opacity:1;transform:scale(1.3)}
+
+footer{text-align:center;padding:12px;font-size:.8rem;color:var(--muted);flex-shrink:0}
+
+.announce-overlay{position:fixed;inset:0;z-index:500;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.85)}
+.announce-overlay.active{display:flex}
+.announce-text{font-size:5rem;font-weight:900;text-transform:uppercase;letter-spacing:.08em;animation:announceIn .5s ease-out;text-shadow:0 0 40px var(--accent)}
+@keyframes announceIn{0%{transform:scale(0);opacity:0}60%{transform:scale(1.2);opacity:1}100%{transform:scale(1)}}
+
+.reactions-float{position:fixed;right:20px;bottom:80px;display:flex;flex-direction:column-reverse;gap:4px;pointer-events:none;z-index:50}
+.react-bubble{font-size:2rem;animation:reactUp 3s ease-out forwards}
+@keyframes reactUp{0%{opacity:1;transform:translateY(0) scale(0)}10%{transform:translateY(0) scale(1.3)}20%{transform:translateY(0) scale(1)}100%{opacity:0;transform:translateY(-60px)}}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="title">The Hangar</div>
+  <div class="header-right">
+    <div class="server-info">
+      <div class="ip" id="serverIP">—</div>
+      <div id="serverHost">esp32.local</div>
+    </div>
+    <div class="qr-corner" id="qrBig"></div>
+  </div>
+</header>
+
+<main>
+  <div class="no-games" id="noGames">
+    <div style="font-size:3rem;margin-bottom:12px">🎮</div>
+    <div>No Active Games</div>
+    <p>Scan the QR code to join and start playing!</p>
+  </div>
+  <div class="room-display" id="roomDisplay"></div>
+  <div class="room-dots" id="roomDots"></div>
+  <div class="reactions-float" id="reactionsFloat"></div>
+</main>
+<div class="announce-overlay" id="announceOverlay"></div>
+
+<footer>The Hangar — Big Screen Mode</footer>
+
+<script src="/qrcode.min.js"></script>
+<script src="/screen.js"></script>
+</body>
+</html>

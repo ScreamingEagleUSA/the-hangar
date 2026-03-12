@@ -1,0 +1,43 @@
+{
+  "overview": "Liar's Dice is a 1v1 bluffing game where each player rolls dice hidden from their opponent. Players take turns making escalating bids about the total dice on the table, until someone calls 'Liar!' and all dice are revealed.",
+  "roles": [
+    {
+      "name": "Player 1",
+      "desc": "Opens the first bid each round (or whoever lost the previous challenge)."
+    },
+    {
+      "name": "Player 2",
+      "desc": "Responds to bids by raising or calling 'Liar!'"
+    }
+  ],
+  "phases": [
+    {
+      "name": "Roll",
+      "desc": "Both players secretly roll their remaining dice. Only you can see your own dice."
+    },
+    {
+      "name": "Bidding",
+      "desc": "Players alternate making bids. A bid states a quantity and face value (e.g. 'Three 4s'), claiming that at least that many dice of that face exist across BOTH players' dice combined. Each new bid must be higher: either more dice, or the same quantity with a higher face value."
+    },
+    {
+      "name": "Challenge",
+      "desc": "Instead of raising, you can call 'Liar!' All dice are revealed and counted. If the actual count meets or exceeds the bid, the caller loses a die. If the count is less than the bid, the bidder loses a die."
+    },
+    {
+      "name": "New Round",
+      "desc": "The player who lost the challenge starts the next round. A new roll happens with each player's remaining dice."
+    }
+  ],
+  "winConditions": [
+    "The player who still has dice remaining wins.",
+    "If your opponent loses all their dice, you win the match."
+  ],
+  "tips": [
+    "1s are WILD — they count as any face value. Use this when calculating odds!",
+    "Exception: if someone bids on 1s specifically, then 1s are NOT wild for that bid.",
+    "Start conservatively — bid what you actually have, then bluff as the stakes rise.",
+    "Pay attention to the total number of dice on the table. With 10 total dice, bidding 'Five 3s' means half the dice would need to be 3s or 1s.",
+    "Sometimes a bold bluff early forces your opponent into a bad position.",
+    "Spectators can see ALL dice — they know exactly who's bluffing!"
+  ]
+}

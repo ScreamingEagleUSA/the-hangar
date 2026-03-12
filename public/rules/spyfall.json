@@ -1,0 +1,26 @@
+{
+  "overview": "In Spyfall, all players except one are given the same secret location. The Spy does not know the location and must figure it out by listening to others. Meanwhile, the other players must identify who the Spy is through careful questioning.",
+  "roles": [
+    {"name": "Citizen", "desc": "You know the secret location. Ask and answer questions to help identify the Spy without revealing the location."},
+    {"name": "Spy", "desc": "You do NOT know the location. Listen carefully to questions and answers to deduce where everyone is. Bluff convincingly!"}
+  ],
+  "phases": [
+    {"name": "Role Reveal", "desc": "Each player sees their role. Citizens see the location. The Spy sees only that they are the Spy."},
+    {"name": "Questioning", "desc": "Players take turns asking each other questions about the location. Questions should be subtle enough to test knowledge without giving away the location to the Spy."},
+    {"name": "Accusation", "desc": "Any player can accuse someone of being the Spy. A majority vote is needed to confirm."},
+    {"name": "Spy Guess", "desc": "At any point during questioning, the Spy can attempt to guess the location. If correct, the Spy wins immediately."}
+  ],
+  "winConditions": [
+    "Town wins if they correctly identify the Spy by majority vote.",
+    "Spy wins if they correctly guess the location.",
+    "Spy wins if the timer runs out (8 minutes) without being caught.",
+    "Town loses if they accuse the wrong person."
+  ],
+  "tips": [
+    "Ask questions that someone at the location would know, but keep them vague enough that the Spy can't guess the location.",
+    "As the Spy, pay close attention to the types of questions being asked — they often hint at the location.",
+    "Don't ask overly specific questions like 'What floor are we on?' as this narrows it down too much for the Spy.",
+    "Requires 4-8 players.",
+    "20 possible locations: School, Hospital, Space Station, Pirate Ship, Movie Studio, Casino, Submarine, Bank, Beach Resort, Circus, Police Station, Airport, Supermarket, Museum, Restaurant, Library, Cruise Ship, Amusement Park, Theater, Office."
+  ]
+}

@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>The Hangar</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div id="toasts"></div>
+
+<!-- ── JOIN SCREEN ─────────────────────────────────────────── -->
+<div id="joinView" class="view active">
+  <div class="join-container">
+    <div class="join-glow"></div>
+    <h1 class="join-title">The<br>Hangar</h1>
+    <div class="server-status">
+      <span class="status-dot online"></span>
+      <span id="joinPlayerCount">Connecting...</span>
+    </div>
+    <div class="join-form">
+      <input type="text" id="usernameInput" placeholder="Enter your name" maxlength="16" autocomplete="off" spellcheck="false">
+      <div class="color-picker" id="colorPicker"></div>
+      <button id="joinBtn" class="btn-primary btn-lg">Enter Lobby</button>
+    </div>
+    <div id="qrContainer" class="qr-section">
+      <p class="qr-label">Scan to join</p>
+      <div id="qrCode"></div>
+      <p class="qr-url" id="qrUrl"></p>
+    </div>
+  </div>
+</div>
+
+<!-- ── LOBBY VIEW ──────────────────────────────────────────── -->
+<div id="lobbyView" class="view">
+  <header class="topbar">
+    <div class="topbar-left">
+      <span class="logo-sm">TH</span>
+      <span class="topbar-user" id="lobbyUsername"></span>
+    </div>
+    <div class="topbar-right">
+      <span class="conn-dot online" id="connDot"></span>
+      <span class="player-badge" id="lobbyPlayerCount">0</span>
+      <button class="btn-icon" id="leaderboardBtn" title="Leaderboard">🏆</button>
+      <button class="btn-icon" id="rulesNavBtn" title="Rules">📖</button>
+      <button class="btn-icon" id="muteBtn" title="Mute">🔊</button>
+      <button class="btn-icon" id="themeBtn" title="Theme">🌙</button>
+    </div>
+  </header>
+  <main class="lobby-main">
+    <section class="rooms-section">
+      <h2 class="section-title">Game Rooms</h2>
+      <div id="roomsGrid" class="rooms-grid"></div>
+      <h2 class="section-title" style="margin-top:20px">Solo Games</h2>
+      <div class="rooms-grid">
+        <div class="room-card solo-card" id="towerCard">
+          <div class="room-card-header">
+            <span class="room-card-name">Tower of Words</span>
+            <span class="room-card-type" style="background:rgba(74,222,128,.1);color:var(--green)">🗼 Solo</span>
+          </div>
+          <p style="font-size:.8rem;color:var(--text-secondary);margin:8px 0">Build a word tower! Each word starts with the last letter of the previous.</p>
+          <button class="room-join-btn" id="towerPlayBtn">Play</button>
+        </div>
+        <div class="room-card solo-card" id="magic8Card">
+          <div class="room-card-header">
+            <span class="room-card-name">Magic 8 Ball</span>
+            <span class="room-card-type" style="background:rgba(167,139,250,.1);color:var(--purple)">🎱 Solo</span>
+          </div>
+          <p style="font-size:.8rem;color:var(--text-secondary);margin:8px 0">Ask a question, shake the ball, and receive wisdom from beyond.</p>
+          <button class="room-join-btn" id="magic8Btn">Play</button>
+        </div>
+        <div class="room-card solo-card" id="reactionCard">
+          <div class="room-card-header">
+            <span class="room-card-name">Reaction Timer</span>
+            <span class="room-card-type" style="background:rgba(251,191,36,.1);color:var(--amber)">⚡ Solo</span>
+          </div>
+          <p style="font-size:.8rem;color:var(--text-secondary);margin:8px 0">Test your reflexes! Tap as fast as you can when the screen turns green.</p>
+          <button class="room-join-btn" id="reactionBtn">Play</button>
+        </div>
+      </div>
+    </section>
+    <section class="chat-section" id="lobbyChatSection">
+      <div class="chat-header">
+        <h3>Chat</h3>
+        <button class="btn-icon chat-toggle" id="chatToggle">▼</button>
+      </div>
+      <div class="chat-messages" id="chatMessages"></div>
+      <div class="chat-input-row">
+        <input type="text" id="chatInput" placeholder="Type a message..." maxlength="140" autocomplete="off">
+        <button class="btn-send" id="chatSendBtn">↑</button>
+      </div>
+    </section>
+  </main>
+</div>
+
+<!-- ── GAME ROOM VIEW ──────────────────────────────────────── -->
+<div id="gameView" class="view">
+  <header class="topbar game-topbar">
+    <div class="topbar-left">
+      <button class="btn-back" id="leaveRoomBtn">← Leave</button>
+      <span class="room-title" id="gameRoomName"></span>
+    </div>
+    <div class="topbar-right">
+      <span class="game-type-badge" id="gameTypeBadge"></span>
+      <button class="btn-icon" id="gameRulesBtn" title="Rules">📖</button>
+      <button class="btn-icon" id="gameMuteBtn" title="Mute">🔊</button>
+    </div>
+  </header>
+  <div class="emote-bar" id="emoteBar"></div>
+  <div class="phase-stepper" id="phaseStepper"></div>
+  <main class="game-main">
+    <div class="game-content" id="gameContent"></div>
+    <aside class="game-sidebar" id="gameSidebar">
+      <h3>Players</h3>
+      <div id="gamePlayers"></div>
+    </aside>
+  </main>
+  <section class="game-chat" id="gameChatSection">
+    <div class="chat-header">
+      <h3>Chat</h3>
+      <button class="btn-icon chat-toggle" id="gameChatToggle">▼</button>
+    </div>
+    <div class="chat-messages" id="gameChatMessages"></div>
+    <div class="chat-input-row">
+      <input type="text" id="gameChatInput" placeholder="Type a message..." maxlength="140" autocomplete="off">
+      <button class="btn-send" id="gameChatSendBtn">↑</button>
+    </div>
+  </section>
+</div>
+
+<!-- ── LEADERBOARD MODAL ───────────────────────────────────── -->
+<div id="leaderboardModal" class="modal">
+  <div class="modal-backdrop"></div>
+  <div class="modal-content">
+    <div class="modal-header">
+      <h2>Leaderboard</h2>
+      <button class="btn-close" id="leaderboardClose">✕</button>
+    </div>
+    <div class="modal-body" id="leaderboardBody"></div>
+  </div>
+</div>
+
+<!-- ── RULES MODAL ─────────────────────────────────────────── -->
+<div id="rulesModal" class="modal">
+  <div class="modal-backdrop"></div>
+  <div class="modal-content modal-lg">
+    <div class="modal-header">
+      <h2>How to Play</h2>
+      <button class="btn-close" id="rulesClose">✕</button>
+    </div>
+    <div class="rules-tabs">
+      <button class="tab active" data-game="mafia">Mafia</button>
+      <button class="tab" data-game="spyfall">Spyfall</button>
+      <button class="tab" data-game="secrethitler">Secret Hitler</button>
+      <button class="tab" data-game="liarsdice">Liar's Dice</button>
+    </div>
+    <div class="modal-body rules-body" id="rulesBody"></div>
+  </div>
+</div>
+
+<!-- ── CREATE ROOM MODAL ───────────────────────────────────── -->
+<div id="createRoomModal" class="modal">
+  <div class="modal-backdrop"></div>
+  <div class="modal-content modal-sm">
+    <div class="modal-header">
+      <h2>Create Room</h2>
+      <button class="btn-close" id="createRoomClose">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-group">
+        <label>Room Name</label>
+        <input type="text" id="roomNameInput" placeholder="My Room" maxlength="18" autocomplete="off">
+      </div>
+      <div class="form-group">
+        <label>Password (optional)</label>
+        <input type="text" id="roomPwInput" placeholder="Leave blank for public" maxlength="8" autocomplete="off">
+      </div>
+      <div class="form-group">
+        <label>Game</label>
+        <div class="game-select">
+          <button class="game-option selected" data-gt="1">
+            <span class="game-icon">🐺</span>
+            <span>Mafia</span>
+            <span class="game-players">5-8 players</span>
+          </button>
+          <button class="game-option" data-gt="2">
+            <span class="game-icon">🕵️</span>
+            <span>Spyfall</span>
+            <span class="game-players">4-8 players</span>
+          </button>
+          <button class="game-option" data-gt="3">
+            <span class="game-icon">🏛️</span>
+            <span>Secret Hitler</span>
+            <span class="game-players">5-8 players</span>
+          </button>
+          <button class="game-option" data-gt="4">
+            <span class="game-icon">🎲</span>
+            <span>Liar's Dice</span>
+            <span class="game-players">2 players</span>
+          </button>
+        </div>
+      </div>
+      <button class="btn-primary btn-lg btn-full" id="createRoomSubmit">Create Room</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── PASSWORD PROMPT MODAL ────────────────────────────────── -->
+<div id="passwordModal" class="modal">
+  <div class="modal-backdrop"></div>
+  <div class="modal-content modal-sm">
+    <div class="modal-header">
+      <h2>Private Room</h2>
+      <button class="btn-close" id="pwClose">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-group">
+        <label>Enter Password</label>
+        <input type="text" id="pwPromptInput" placeholder="Room password" maxlength="8" autocomplete="off">
+      </div>
+      <button class="btn-primary btn-lg btn-full" id="pwSubmitBtn">Join</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── TOWER OF WORDS VIEW ──────────────────────────────────── -->
+<div id="towerView" class="view">
+  <header class="topbar game-topbar">
+    <div class="topbar-left">
+      <button class="btn-back" id="towerLeaveBtn">← Back</button>
+      <span class="room-title">Tower of Words</span>
+    </div>
+    <div class="topbar-right">
+      <span class="game-type-badge" style="background:rgba(74,222,128,.1);color:var(--green)">🗼 Solo</span>
+    </div>
+  </header>
+  <main class="game-content" style="justify-content:flex-end;padding-bottom:16px">
+    <div id="towerStack" class="tower-stack"></div>
+    <div id="towerUI" class="tower-ui"></div>
+  </main>
+</div>
+
+<!-- ── MAGIC 8 BALL VIEW ─────────────────────────────────────── -->
+<div id="magic8View" class="view">
+  <header class="topbar game-topbar">
+    <div class="topbar-left">
+      <button class="btn-back" id="magic8LeaveBtn">← Back</button>
+      <span class="room-title">Magic 8 Ball</span>
+    </div>
+    <div class="topbar-right">
+      <span class="game-type-badge" style="background:rgba(167,139,250,.1);color:var(--purple)">🎱 Solo</span>
+    </div>
+  </header>
+  <main class="game-content" id="magic8Content"></main>
+</div>
+
+<!-- ── REACTION TIMER VIEW ──────────────────────────────────── -->
+<div id="reactionView" class="view">
+  <header class="topbar game-topbar">
+    <div class="topbar-left">
+      <button class="btn-back" id="reactionLeaveBtn">← Back</button>
+      <span class="room-title">Reaction Timer</span>
+    </div>
+    <div class="topbar-right">
+      <span class="game-type-badge" style="background:rgba(251,191,36,.1);color:var(--amber)">⚡ Solo</span>
+    </div>
+  </header>
+  <main class="game-content" id="reactionContent"></main>
+</div>
+
+<script src="/qrcode.min.js"></script>
+<script src="/app.js"></script>
+</body>
+</html>

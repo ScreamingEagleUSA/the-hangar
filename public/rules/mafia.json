@@ -1,0 +1,26 @@
+{
+  "overview": "Mafia is a social deduction game where the town must identify and eliminate the Mafia members before they take over. During the night, Mafia secretly eliminates a player. During the day, everyone discusses and votes to eliminate a suspect.",
+  "roles": [
+    {"name": "Villager", "desc": "A regular town member. Use discussion and logic to find the Mafia. Vote wisely during the day."},
+    {"name": "Mafia", "desc": "You are the villain. During the night, choose a player to eliminate. During the day, blend in and avoid suspicion."},
+    {"name": "Doctor", "desc": "Each night, choose one player to protect. If the Mafia targets them, they survive. You can protect yourself."},
+    {"name": "Detective", "desc": "Each night, investigate one player to learn if they are Mafia or not. Use this information carefully during discussions."}
+  ],
+  "phases": [
+    {"name": "Night Phase", "desc": "All players close their eyes. Mafia chooses a target to eliminate. Doctor chooses someone to protect. Detective investigates a player."},
+    {"name": "Result", "desc": "The results of the night are revealed. If someone was killed (and not saved by the Doctor), they are eliminated."},
+    {"name": "Discussion", "desc": "All surviving players discuss who they think is Mafia. Share suspicions, alibis, and theories. Time is limited."},
+    {"name": "Voting", "desc": "Each player votes for who to eliminate, or skips. The player with the most votes is eliminated and their role is revealed."}
+  ],
+  "winConditions": [
+    "Town wins when all Mafia members are eliminated.",
+    "Mafia wins when the number of Mafia equals or exceeds the number of town members."
+  ],
+  "tips": [
+    "Pay attention to who defends whom during discussions.",
+    "As Detective, be careful when sharing your findings — the Mafia might target you.",
+    "As Doctor, try to predict who the Mafia will target.",
+    "Voting patterns can reveal alliances.",
+    "Requires 5-8 players."
+  ]
+}
