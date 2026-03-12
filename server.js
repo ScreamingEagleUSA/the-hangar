@@ -169,14 +169,14 @@ app.get('/api/reactions', (req, res) => {
 // 404
 app.use((req, res) => res.status(404).send('Not Found'));
 
-// Game loop (tick every 200ms)
-setInterval(() => Lobby.tick(), 200);
-
 // Startup
 async function start() {
   await Chat.init(supabase);
   await Leaderboard.init(supabase);
   Lobby.init(broadcastAll, sendToClient, disconnectClient);
+
+  // Game loop -- must start after Lobby.init() populates rooms
+  setInterval(() => Lobby.tick(), 200);
 
   const port = process.env.PORT || 3000;
   const host = '0.0.0.0';
