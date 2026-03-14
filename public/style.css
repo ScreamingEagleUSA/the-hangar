@@ -576,20 +576,25 @@ input[type="text"]::placeholder { color: var(--text-muted); }
 .rules-body li { color: var(--text-secondary); font-size: .88rem; margin-bottom: 4px; line-height: 1.5; }
 
 /* ── Create Room ──────────────────────────────────────────── */
+.create-room-modal { max-width: 420px; }
 .form-group { margin-bottom: 16px; }
 .form-group label { display: block; font-size: .85rem; font-weight: 600; margin-bottom: 6px; }
-.form-group input { width: 100%; }
-.game-select { display: flex; gap: 8px; }
+.form-group input { width: 100%; box-sizing: border-box; }
+.game-select {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px;
+}
 .game-option {
-  flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4px;
-  padding: 12px 8px; background: var(--surface-glass); border: 2px solid var(--border);
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px;
+  padding: 12px 6px; background: var(--surface-glass); border: 2px solid var(--border);
   border-radius: var(--radius-sm); cursor: pointer; transition: all .2s;
   color: var(--text-primary); font-family: var(--font); font-size: .8rem;
+  min-height: 80px; text-align: center;
 }
-.game-option:hover { border-color: var(--text-muted); }
-.game-option.selected { border-color: var(--accent); background: rgba(91,127,255,.08); }
-.game-icon { font-size: 1.5rem; }
-.game-players { font-size: .65rem; color: var(--text-muted); display: block; margin-top: 2px; }
+.game-option:hover { border-color: var(--text-muted); background: var(--surface-glass); }
+.game-option.selected { border-color: var(--accent); background: rgba(91,127,255,.12); box-shadow: 0 0 0 1px var(--accent); }
+.game-icon { font-size: 1.4rem; line-height: 1; }
+.game-name { font-size: .78rem; font-weight: 600; line-height: 1.2; }
+.game-players { font-size: .65rem; color: var(--text-muted); display: block; margin-top: 2px; line-height: 1; }
 
 /* ── Leaderboard ──────────────────────────────────────────── */
 .lb-table { width: 100%; border-collapse: collapse; }
@@ -1089,7 +1094,7 @@ input[type="text"]::placeholder { color: var(--text-muted); }
   .game-main { flex-direction: column; }
   .game-content { padding: 12px; }
   .rooms-grid { grid-template-columns: 1fr; }
-  .game-select { flex-direction: column; }
+  .game-select { grid-template-columns: repeat(2, 1fr); }
   .join-title { font-size: 1.6rem; }
 }
 
@@ -1097,5 +1102,10 @@ input[type="text"]::placeholder { color: var(--text-muted); }
   .phase-line { width: 16px; }
   .topbar { padding: 8px 10px; }
   .modal-content { width: 95%; }
+  .create-room-modal { max-width: 95%; }
+  .game-select { grid-template-columns: repeat(2, 1fr); gap: 6px; }
+  .game-option { padding: 10px 4px; min-height: 72px; }
+  .game-icon { font-size: 1.2rem; }
+  .game-name { font-size: .72rem; }
   .game-chat { height: 160px; }
 }

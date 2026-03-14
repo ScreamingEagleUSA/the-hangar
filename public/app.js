@@ -30,7 +30,7 @@ const $$ = (s, p) => (p || document).querySelectorAll(s);
 
 const views = { join: $('#joinView'), lobby: $('#lobbyView'), game: $('#gameView'), tower: $('#towerView'), magic8: $('#magic8View'), reaction: $('#reactionView'), arcade: $('#arcadeView') };
 const modals = {
-  leaderboard: $('#leaderboardModal'), rules: $('#rulesModal'), createRoom: $('#createRoomModal'), password: $('#passwordModal')
+  leaderboard: $('#leaderboardModal'), rules: $('#rulesModal'), createRoom: $('#createRoomModal')
 };
 
 // ── Utility ──────────────────────────────────────────────────────
@@ -460,8 +460,7 @@ function renderRooms() {
     html += `<span class="player-count-text">${r.pc}/${r.mx}</span></div>
       <div class="room-card-footer">
         <span>${isLive ? '<span class="live-badge">LIVE</span>' : '<span class="phase-badge">Waiting</span>'}</span>
-        ${r.ph === 0 ? `<button class="room-join-btn" onclick="tryJoinRoom(${r.id},${r.lk ? 'true' : 'false'})">Join</button>` : ''}
-        ${r.lk ? '<span style="font-size:.8rem" title="Password required">🔒</span>' : ''}
+        ${r.ph === 0 ? `<button class="room-join-btn" onclick="tryJoinRoom(${r.id})">Join</button>` : ''}
       </div>
     </div>`;
   });
@@ -1259,13 +1258,7 @@ window.requestRematch = function() {
   send({ t: 'rematch' });
 };
 
-let pendingJoinRoom = -1;
-window.tryJoinRoom = function(id, locked) {
-  if (locked) {
-    pendingJoinRoom = id;
-    showModal('password');
-    return;
-  }
+window.tryJoinRoom = function(id) {
   joinRoom(id);
 };
 
@@ -1987,22 +1980,9 @@ function init() {
   });
   $('#createRoomSubmit').addEventListener('click', () => {
     const name = $('#roomNameInput').value.trim() || 'Room';
-    const pw = $('#roomPwInput').value.trim();
-    const msg = { t: 'createRoom', n: name, gt: selectedGameType };
-    if (pw) msg.pw = pw;
-    send(msg);
+    send({ t: 'createRoom', n: name, gt: selectedGameType });
     hideModal('createRoom');
     currentRoom = 0;
-    showView('game');
-  });
-
-  // Password prompt
-  $('#pwClose').addEventListener('click', () => hideModal('password'));
-  $('#pwSubmitBtn').addEventListener('click', () => {
-    const pw = $('#pwPromptInput').value.trim();
-    hideModal('password');
-    send({ t: 'joinRoom', id: pendingJoinRoom, pw: pw });
-    currentRoom = pendingJoinRoom;
     showView('game');
   });
 

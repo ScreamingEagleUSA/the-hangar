@@ -191,7 +191,7 @@
 <!-- ── CREATE ROOM MODAL ───────────────────────────────────── -->
 <div id="createRoomModal" class="modal">
   <div class="modal-backdrop"></div>
-  <div class="modal-content modal-sm">
+  <div class="modal-content create-room-modal">
     <div class="modal-header">
       <h2>Create Room</h2>
       <button class="btn-close" id="createRoomClose">✕</button>
@@ -202,63 +202,41 @@
         <input type="text" id="roomNameInput" placeholder="My Room" maxlength="18" autocomplete="off">
       </div>
       <div class="form-group">
-        <label>Password (optional)</label>
-        <input type="text" id="roomPwInput" placeholder="Leave blank for public" maxlength="8" autocomplete="off">
-      </div>
-      <div class="form-group">
-        <label>Game</label>
+        <label>Choose a Game</label>
         <div class="game-select">
           <button class="game-option selected" data-gt="1">
             <span class="game-icon">🐺</span>
-            <span>Mafia</span>
+            <span class="game-name">Mafia</span>
             <span class="game-players">5-8 players</span>
           </button>
           <button class="game-option" data-gt="2">
             <span class="game-icon">🕵️</span>
-            <span>Spyfall</span>
+            <span class="game-name">Spyfall</span>
             <span class="game-players">4-8 players</span>
           </button>
           <button class="game-option" data-gt="3">
             <span class="game-icon">🏛️</span>
-            <span>Secret Hitler</span>
+            <span class="game-name">Secret Hitler</span>
             <span class="game-players">5-8 players</span>
           </button>
           <button class="game-option" data-gt="4">
             <span class="game-icon">🎲</span>
-            <span>Liar's Dice</span>
+            <span class="game-name">Liar's Dice</span>
             <span class="game-players">2 players</span>
           </button>
           <button class="game-option" data-gt="5">
             <span class="game-icon">❌⭕</span>
-            <span>Tic-Tac-Toe</span>
+            <span class="game-name">Tic-Tac-Toe</span>
             <span class="game-players">2 players</span>
           </button>
           <button class="game-option" data-gt="6">
             <span class="game-icon">🧠</span>
-            <span>Trivia</span>
+            <span class="game-name">Trivia</span>
             <span class="game-players">2-8 players</span>
           </button>
         </div>
       </div>
       <button class="btn-primary btn-lg btn-full" id="createRoomSubmit">Create Room</button>
-    </div>
-  </div>
-</div>
-
-<!-- ── PASSWORD PROMPT MODAL ────────────────────────────────── -->
-<div id="passwordModal" class="modal">
-  <div class="modal-backdrop"></div>
-  <div class="modal-content modal-sm">
-    <div class="modal-header">
-      <h2>Private Room</h2>
-      <button class="btn-close" id="pwClose">✕</button>
-    </div>
-    <div class="modal-body">
-      <div class="form-group">
-        <label>Enter Password</label>
-        <input type="text" id="pwPromptInput" placeholder="Room password" maxlength="8" autocomplete="off">
-      </div>
-      <button class="btn-primary btn-lg btn-full" id="pwSubmitBtn">Join</button>
     </div>
   </div>
 </div>

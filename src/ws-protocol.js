@@ -65,12 +65,11 @@ async function handleMessage(clientId, data) {
   else if (type === 'createRoom') {
     const name = msg.n;
     const gt = msg.gt || 0;
-    const pw = msg.pw;
     if (!name || gt === 0 || gt > 6) {
       Lobby.sendToClient(clientId, JSON.stringify({ t: 'err', m: 'Invalid room params' }));
       return;
     }
-    const roomIdx = Lobby.createRoom(name, gt, clientId, pw);
+    const roomIdx = Lobby.createRoom(name, gt, clientId);
     if (roomIdx < 0) {
       Lobby.sendToClient(clientId, JSON.stringify({ t: 'err', m: 'Cannot create room' }));
       return;
@@ -81,9 +80,8 @@ async function handleMessage(clientId, data) {
   // Join Room
   else if (type === 'joinRoom') {
     const roomId = msg.id;
-    const pw = msg.pw;
     if (roomId === undefined) return;
-    if (!Lobby.joinRoom(clientId, roomId, pw)) {
+    if (!Lobby.joinRoom(clientId, roomId)) {
       Lobby.sendToClient(clientId, JSON.stringify({ t: 'err', m: 'Cannot join room' }));
     }
   }

@@ -120,7 +120,7 @@ const Lobby = {
     return _users.filter(u => u.connected).length;
   },
 
-  createRoom(name, type, clientId, password) {
+  createRoom(name, type, clientId) {
     const user = this.findUser(clientId);
     if (!user || user.roomIdx >= 0) return -1;
 
@@ -129,9 +129,6 @@ const Lobby = {
 
       _rooms[i].init(i);
       _rooms[i].name = name.substring(0, 19);
-      if (password && password.length > 0 && password.length < 9) {
-        _rooms[i].password = password;
-      }
       _rooms[i].gameType = type;
       _rooms[i].active = true;
       _rooms[i].phase = GamePhase.WAITING;
@@ -162,12 +159,9 @@ const Lobby = {
     return -1;
   },
 
-  joinRoom(clientId, roomIdx, password) {
+  joinRoom(clientId, roomIdx) {
     if (roomIdx >= MAX_ROOMS || !_rooms[roomIdx].active) return false;
     if (_rooms[roomIdx].phase !== GamePhase.WAITING) return false;
-    if (_rooms[roomIdx].password) {
-      if (!password || _rooms[roomIdx].password !== password) return false;
-    }
 
     const user = this.findUser(clientId);
     if (!user || user.roomIdx >= 0) return false;

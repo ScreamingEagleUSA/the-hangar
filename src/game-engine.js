@@ -21,7 +21,6 @@ class GameRoom {
   init(id) {
     this.roomId = id;
     this.name = '';
-    this.password = '';
     this.gameType = GameType.NONE;
     this.phase = GamePhase.WAITING;
     this.players = [];
@@ -91,7 +90,6 @@ class GameRoom {
       host: this.hostPlayerIdx,
       pl: this.players.map(p => ({ u: p.username, r: p.ready, a: p.alive })),
     };
-    if (this.password) obj.lk = true;
     return obj;
   }
 }
