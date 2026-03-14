@@ -1,10 +1,11 @@
 const { CHAT_USERNAME_MAX_LEN, CHAT_RATE_LIMIT_MS } = require('./config');
 const Lobby = require('./lobby');
 const Chat = require('./chat');
+const ChatRooms = require('./chat-rooms');
 
 const _lastMsgTime = new Map();
 
-function handleMessage(clientId, data) {
+async function handleMessage(clientId, data) {
   let msg;
   try { msg = JSON.parse(data); } catch { return; }
   const type = msg.t;
@@ -65,7 +66,7 @@ function handleMessage(clientId, data) {
     const name = msg.n;
     const gt = msg.gt || 0;
     const pw = msg.pw;
-    if (!name || gt === 0 || gt > 4) {
+    if (!name || gt === 0 || gt > 6) {
       Lobby.sendToClient(clientId, JSON.stringify({ t: 'err', m: 'Invalid room params' }));
       return;
     }
@@ -133,9 +134,40 @@ function handleMessage(clientId, data) {
     const target = msg.target;
     if (target !== undefined) Lobby.kickPlayer(clientId, target);
   }
+
+  // Chat Room: Join
+  else if (type === 'joinChatRoom') {
+    const roomId = msg.roomId;
+    const pw = msg.pw;
+    if (!roomId) return;
+    const result = await ChatRooms.joinRoom(roomId, pw, clientId, user.username);
+    Lobby.sendToClient(clientId, JSON.stringify({
+      t: 'chatRoomJoined', ...result,
+    }));
+  }
+
+  // Chat Room: Leave
+  else if (type === 'leaveChatRoom') {
+    ChatRooms.leaveRoom(clientId, user.username);
+    Lobby.sendToClient(clientId, JSON.stringify({ t: 'chatRoomLeft' }));
+  }
+
+  // Chat Room: Message
+  else if (type === 'chatRoomMsg') {
+    const m = msg.m;
+    if (!m || m.length === 0) return;
+    const now = Date.now();
+    const last = _lastMsgTime.get(clientId) || 0;
+    if (now - last < CHAT_RATE_LIMIT_MS) return;
+    _lastMsgTime.set(clientId, now);
+    ChatRooms.sendMessage(clientId, user.username, m);
+  }
 }
 
 function handleDisconnect(clientId) {
+  const user = Lobby.findUser(clientId);
+  const uname = user ? user.username : null;
+  ChatRooms.leaveRoom(clientId, uname);
   Lobby.removeUser(clientId);
   _lastMsgTime.delete(clientId);
 }

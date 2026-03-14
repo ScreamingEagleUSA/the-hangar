@@ -49,7 +49,7 @@
   </header>
   <main class="lobby-main">
     <section class="rooms-section">
-      <h2 class="section-title">Game Rooms</h2>
+      <h2 class="section-title">Multiplayer Game Rooms</h2>
       <div id="roomsGrid" class="rooms-grid"></div>
       <h2 class="section-title" style="margin-top:20px">Solo Games</h2>
       <div class="rooms-grid">
@@ -83,13 +83,35 @@
     </section>
     <section class="chat-section" id="lobbyChatSection">
       <div class="chat-header">
-        <h3>Chat</h3>
+        <div class="chat-tabs" id="chatPanelTabs">
+          <button class="chat-tab active" data-tab="lobby">Lobby Chat</button>
+          <button class="chat-tab" data-tab="rooms">Chat Rooms</button>
+        </div>
         <button class="btn-icon chat-toggle" id="chatToggle">▼</button>
       </div>
-      <div class="chat-messages" id="chatMessages"></div>
-      <div class="chat-input-row">
-        <input type="text" id="chatInput" placeholder="Type a message..." maxlength="140" autocomplete="off">
-        <button class="btn-send" id="chatSendBtn">↑</button>
+      <!-- Lobby Chat Panel -->
+      <div id="lobbyChatPanel">
+        <div class="chat-messages" id="chatMessages"></div>
+        <div class="chat-input-row">
+          <input type="text" id="chatInput" placeholder="Type a message..." maxlength="140" autocomplete="off">
+          <button class="btn-send" id="chatSendBtn">↑</button>
+        </div>
+      </div>
+      <!-- Chat Rooms Panel -->
+      <div id="chatRoomsPanel" style="display:none;flex:1;overflow:hidden;flex-direction:column">
+        <div id="chatRoomsList" class="chat-rooms-list"></div>
+        <div id="chatRoomView" style="display:none;flex:1;flex-direction:column;overflow:hidden">
+          <div class="chat-room-topbar">
+            <button class="btn-back" id="chatRoomBackBtn" style="font-size:.75rem;padding:4px 8px">← Back</button>
+            <span class="chat-room-name" id="chatRoomName"></span>
+            <span class="chat-room-timer" id="chatRoomTimer"></span>
+          </div>
+          <div class="chat-messages" id="chatRoomMessages"></div>
+          <div class="chat-input-row">
+            <input type="text" id="chatRoomInput" placeholder="Type a message..." maxlength="500" autocomplete="off">
+            <button class="btn-send" id="chatRoomSendBtn">↑</button>
+          </div>
+        </div>
       </div>
     </section>
   </main>
@@ -159,6 +181,8 @@
       <button class="tab" data-game="spyfall">Spyfall</button>
       <button class="tab" data-game="secrethitler">Secret Hitler</button>
       <button class="tab" data-game="liarsdice">Liar's Dice</button>
+      <button class="tab" data-game="tictactoe">Tic-Tac-Toe</button>
+      <button class="tab" data-game="trivia">Trivia</button>
     </div>
     <div class="modal-body rules-body" id="rulesBody"></div>
   </div>
@@ -203,6 +227,16 @@
             <span class="game-icon">🎲</span>
             <span>Liar's Dice</span>
             <span class="game-players">2 players</span>
+          </button>
+          <button class="game-option" data-gt="5">
+            <span class="game-icon">❌⭕</span>
+            <span>Tic-Tac-Toe</span>
+            <span class="game-players">2 players</span>
+          </button>
+          <button class="game-option" data-gt="6">
+            <span class="game-icon">🧠</span>
+            <span>Trivia</span>
+            <span class="game-players">2-8 players</span>
           </button>
         </div>
       </div>
@@ -285,7 +319,7 @@
       <span class="game-type-badge" style="background:rgba(91,127,255,.1);color:var(--accent)">🕹️ Arcade</span>
     </div>
   </header>
-  <iframe id="arcadeIframe" class="arcade-iframe" sandbox="allow-scripts allow-same-origin allow-popups" allowfullscreen></iframe>
+  <iframe id="arcadeIframe" class="arcade-iframe" sandbox="allow-scripts allow-same-origin allow-popups allow-pointer-lock" allowfullscreen></iframe>
 </div>
 
 <script src="/qrcode.min.js"></script>

@@ -3,6 +3,8 @@ const {
   GameType, GamePhase, IDLE_TIMEOUT_MS,
   MIN_PLAYERS_MAFIA, MIN_PLAYERS_SPYFALL, MIN_PLAYERS_SECRETH,
   MIN_PLAYERS_LIARS_DICE, MAX_PLAYERS_LIARS_DICE,
+  MIN_PLAYERS_TICTACTOE, MAX_PLAYERS_TICTACTOE,
+  MIN_PLAYERS_TRIVIA, MAX_PLAYERS_TRIVIA,
   CHAT_USERNAME_MAX_LEN,
 } = require('./config');
 const { GameRoom } = require('./game-engine');
@@ -12,6 +14,8 @@ const MafiaGame = require('./games/mafia');
 const SpyfallGame = require('./games/spyfall');
 const SecretHitlerGame = require('./games/secret-hitler');
 const LiarsDiceGame = require('./games/liars-dice');
+const TicTacToeGame = require('./games/tictactoe');
+const TriviaGame = require('./games/trivia');
 
 const _rooms = [];
 const _users = [];
@@ -131,13 +135,21 @@ const Lobby = {
       _rooms[i].gameType = type;
       _rooms[i].active = true;
       _rooms[i].phase = GamePhase.WAITING;
-      _rooms[i].maxPlayers = (type === GameType.LIARS_DICE) ? MAX_PLAYERS_LIARS_DICE : MAX_PLAYERS_PER_ROOM;
+      if (type === GameType.LIARS_DICE || type === GameType.TICTACTOE) {
+        _rooms[i].maxPlayers = 2;
+      } else if (type === GameType.TRIVIA) {
+        _rooms[i].maxPlayers = MAX_PLAYERS_TRIVIA;
+      } else {
+        _rooms[i].maxPlayers = MAX_PLAYERS_PER_ROOM;
+      }
 
       switch (type) {
         case GameType.MAFIA: _rooms[i].engine = new MafiaGame(); break;
         case GameType.SPYFALL: _rooms[i].engine = new SpyfallGame(); break;
         case GameType.SECRET_HITLER: _rooms[i].engine = new SecretHitlerGame(); break;
         case GameType.LIARS_DICE: _rooms[i].engine = new LiarsDiceGame(); break;
+        case GameType.TICTACTOE: _rooms[i].engine = new TicTacToeGame(); break;
+        case GameType.TRIVIA: _rooms[i].engine = new TriviaGame(); break;
         default: return -1;
       }
 
@@ -198,7 +210,7 @@ const Lobby = {
         room.phase = GamePhase.WAITING;
         room.players.length = 0;
         if (room.engine) room.engine.reset();
-      } else if (room.gameType === GameType.LIARS_DICE) {
+      } else if (room.gameType === GameType.LIARS_DICE || room.gameType === GameType.TICTACTOE) {
         for (const p of room.players) {
           if (p.connected) Leaderboard.recordWin(p.username);
           else Leaderboard.recordLoss(p.username);
@@ -240,6 +252,8 @@ const Lobby = {
       [GameType.SPYFALL]: MIN_PLAYERS_SPYFALL,
       [GameType.SECRET_HITLER]: MIN_PLAYERS_SECRETH,
       [GameType.LIARS_DICE]: MIN_PLAYERS_LIARS_DICE,
+      [GameType.TICTACTOE]: MIN_PLAYERS_TICTACTOE,
+      [GameType.TRIVIA]: MIN_PLAYERS_TRIVIA,
     };
     const minPlayers = minMap[room.gameType] || 2;
     if (room.playerCount < minPlayers) return false;

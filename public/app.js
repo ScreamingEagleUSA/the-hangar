@@ -8,9 +8,9 @@ let currentRoom = -1;
 let rooms = [];
 let gameState = null;
 let selectedGameType = 1;
-const GAME_NAMES = ['', 'Mafia', 'Spyfall', 'Secret Hitler', "Liar's Dice"];
-const GAME_ICONS = ['', '🐺', '🕵️', '🏛️', '🎲'];
-const GAME_CLASSES = ['', 'mafia', 'spyfall', 'secrethitler', 'liarsdice'];
+const GAME_NAMES = ['', 'Mafia', 'Spyfall', 'Secret Hitler', "Liar's Dice", 'Tic-Tac-Toe', 'Trivia'];
+const GAME_ICONS = ['', '🐺', '🕵️', '🏛️', '🎲', '❌⭕', '🧠'];
+const GAME_CLASSES = ['', 'mafia', 'spyfall', 'secrethitler', 'liarsdice', 'tictactoe', 'trivia'];
 const DICE_FACES = ['', '⚀', '⚁', '⚂', '⚃', '⚄', '⚅'];
 const PHASE_NAMES = ['Waiting', 'Roles', 'Discussion', 'Night', 'Action', 'Voting', 'Result', 'Game Over'];
 const MAFIA_ROLES = ['Villager', 'Mafia', 'Doctor', 'Detective'];
@@ -358,6 +358,22 @@ function handleMessage(data) {
       if (data.msgs) data.msgs.forEach(m => appendChat(m, true));
       scrollChat();
       break;
+    case 'chatRoomJoined':
+      if (data.ok) { enterChatRoom(data); }
+      else { toast(data.err || 'Cannot join room', true); }
+      break;
+    case 'chatRoomLeft':
+      currentChatRoom = null;
+      break;
+    case 'chatRoomMsg':
+      appendChatRoomMsg(data);
+      SFX.chat();
+      break;
+    case 'chatRoomKicked':
+      currentChatRoom = null;
+      toast(data.m || 'Room deleted', true);
+      loadChatRooms();
+      break;
     case 'room':
       if (data.state && data.state.colors) {
         Object.assign(playerColors, data.state.colors);
@@ -480,6 +496,10 @@ function renderGame() {
   } else if (gs) {
     if (gs.gt === 4) {
       renderLiarsDice(content, gs);
+    } else if (gs.gt === 5) {
+      renderTicTacToe(content, gs);
+    } else if (gs.gt === 6) {
+      renderTrivia(content, gs);
     } else {
       switch (gs.ph) {
         case 1: renderRoleReveal(content, gs); break;
@@ -1065,6 +1085,117 @@ function renderLiarsDice(el, gs) {
   el.innerHTML = html;
 }
 
+// ── Tic-Tac-Toe Rendering ────────────────────────────────────────
+function renderTicTacToe(el, gs) {
+  const myIdx = gs.pl ? gs.pl.findIndex(p => p.u === username) : -1;
+  const symbols = ['❌', '⭕'];
+  let html = '<div class="game-card ttt-card">';
+
+  if (gs.ph === 4) { // ACTION — playing
+    const isMyTurn = myIdx >= 0 && gs.turn === myIdx;
+    html += `<h2>${isMyTurn ? '🎯 Your Turn' : "⏳ Opponent's Turn"}</h2>`;
+    html += `<div class="ttt-score">${gs.pl.map((p, i) => `${avatarHTML(p.u, 24)} <strong>${esc(p.u)}</strong> ${symbols[i]} <span class="ttt-pts">${gs.scores[i]}</span>`).join(' <span class="ld-score-vs">vs</span> ')}</div>`;
+    html += `<div class="ttt-info">Round ${gs.round + 1} — First to 3 wins</div>`;
+    html += timerRingHTML(gs.elapsed, gs.tl);
+    html += '<div class="ttt-board">';
+    for (let i = 0; i < 9; i++) {
+      const val = gs.board[i];
+      const clickable = isMyTurn && val === -1;
+      const winCell = gs.winLine && gs.winLine.includes(i);
+      html += `<div class="ttt-cell${clickable ? ' clickable' : ''}${winCell ? ' win' : ''}" ${clickable ? `onclick="gameAction('move',{cell:${i}})"` : ''}>${val >= 0 ? symbols[val] : ''}</div>`;
+    }
+    html += '</div>';
+    if (myIdx >= 0) html += `<p class="ttt-you-are">You are <strong>${symbols[myIdx]}</strong></p>`;
+  } else if (gs.ph === 6) { // RESULT
+    const draw = gs.winner === -2;
+    html += `<h2>${draw ? '🤝 Draw!' : `${symbols[gs.winner]} ${esc(gs.pl[gs.winner].u)} wins the round!`}</h2>`;
+    html += `<div class="ttt-score">${gs.pl.map((p, i) => `${avatarHTML(p.u, 24)} <strong>${esc(p.u)}</strong> <span class="ttt-pts">${gs.scores[i]}</span>`).join(' — ')}</div>`;
+    html += '<div class="ttt-board">';
+    for (let i = 0; i < 9; i++) {
+      const val = gs.board[i];
+      const winCell = gs.winLine && gs.winLine.includes(i);
+      html += `<div class="ttt-cell${winCell ? ' win' : ''}">${val >= 0 ? symbols[val] : ''}</div>`;
+    }
+    html += '</div>';
+    html += timerRingHTML(gs.elapsed, gs.tl);
+  } else if (gs.ph === 7) { // GAME OVER
+    const iWon = myIdx >= 0 && gs.scores[myIdx] >= 3;
+    html = `<div class="game-card ttt-card game-over-card ${iWon ? 'win' : 'lose'}">`;
+    html += `<h2>${iWon ? '🎉 Victory!' : '😔 Defeat'}</h2>`;
+    html += `<div class="ttt-score">${gs.pl.map((p, i) => `${avatarHTML(p.u, 24)} <strong>${esc(p.u)}</strong> <span class="ttt-pts">${gs.scores[i]}</span>`).join(' — ')}</div>`;
+    html += '<div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin-top:16px">';
+    html += '<button class="btn-primary" onclick="requestRematch()">Rematch</button>';
+    html += '<button class="btn-secondary" onclick="backToLobby()">Back to Lobby</button>';
+    html += '</div>';
+    if (iWon) { setTimeout(spawnConfetti, 100); SFX.win(); } else { SFX.lose(); }
+  }
+
+  html += '</div>';
+  el.innerHTML = html;
+}
+
+// ── Trivia Rendering ─────────────────────────────────────────────
+function renderTrivia(el, gs) {
+  const myIdx = gs.pl ? gs.pl.findIndex(p => p.u === username) : -1;
+  let html = '<div class="game-card trivia-card">';
+
+  if (gs.ph === 4) { // ACTION
+    html += `<div class="trivia-header">Question ${gs.qIdx + 1} / ${gs.qTotal}</div>`;
+    html += '<div class="trivia-scores">';
+    gs.pl.forEach((p, i) => {
+      html += `<div class="trivia-player-score${p.answered ? ' answered' : ''}">${avatarHTML(p.u, 22)}<span>${esc(p.u)}</span><span class="trivia-pts">${gs.scores[i]}</span></div>`;
+    });
+    html += '</div>';
+
+    if (gs.subPh === 'question') {
+      html += timerRingHTML(gs.elapsed, gs.tl);
+      html += `<h2 class="trivia-question">${esc(gs.question)}</h2>`;
+      html += '<div class="trivia-options">';
+      const letters = ['A', 'B', 'C', 'D'];
+      gs.options.forEach((opt, i) => {
+        const myPick = gs.myAnswer === i;
+        const disabled = gs.myAnswer !== undefined && gs.myAnswer !== -1;
+        html += `<button class="trivia-opt${myPick ? ' selected' : ''}${disabled ? ' locked' : ''}" ${disabled ? 'disabled' : `onclick="gameAction('answer',{choice:${i}})"`}><span class="trivia-letter">${letters[i]}</span>${esc(opt)}</button>`;
+      });
+      html += '</div>';
+      const answeredCount = gs.pl.filter(p => p.answered).length;
+      html += `<div class="trivia-status">${answeredCount}/${gs.pl.length} answered</div>`;
+    } else {
+      // result sub-phase
+      html += `<h2 class="trivia-question">${esc(gs.question)}</h2>`;
+      html += '<div class="trivia-options">';
+      const letters = ['A', 'B', 'C', 'D'];
+      gs.options.forEach((opt, i) => {
+        const isCorrect = i === gs.correct;
+        const cls = isCorrect ? ' correct' : (gs.answers && myIdx >= 0 && gs.answers[myIdx] === i && !isCorrect) ? ' wrong' : '';
+        html += `<button class="trivia-opt${cls} locked" disabled><span class="trivia-letter">${letters[i]}</span>${esc(opt)}</button>`;
+      });
+      html += '</div>';
+      html += timerRingHTML(gs.elapsed, gs.tl);
+    }
+  } else if (gs.ph === 7) { // GAME OVER
+    const maxScore = Math.max(...gs.scores);
+    const iWon = myIdx >= 0 && gs.scores[myIdx] === maxScore;
+    html = `<div class="game-card trivia-card game-over-card ${iWon ? 'win' : 'lose'}">`;
+    html += `<h2>${iWon ? '🎉 Victory!' : '😔 Nice Try!'}</h2>`;
+    html += '<div class="trivia-final-scores">';
+    const sorted = gs.pl.map((p, i) => ({ u: p.u, s: gs.scores[i] })).sort((a, b) => b.s - a.s);
+    sorted.forEach((p, rank) => {
+      const medal = rank === 0 ? '🥇' : rank === 1 ? '🥈' : rank === 2 ? '🥉' : `${rank + 1}.`;
+      html += `<div class="trivia-final-row${p.u === username ? ' me' : ''}">${medal} ${avatarHTML(p.u, 24)} <strong>${esc(p.u)}</strong> <span class="trivia-pts">${p.s} pts</span></div>`;
+    });
+    html += '</div>';
+    html += '<div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin-top:16px">';
+    html += '<button class="btn-primary" onclick="requestRematch()">Play Again</button>';
+    html += '<button class="btn-secondary" onclick="backToLobby()">Back to Lobby</button>';
+    html += '</div>';
+    if (iWon) { setTimeout(spawnConfetti, 100); SFX.win(); } else { SFX.lose(); }
+  }
+
+  html += '</div>';
+  el.innerHTML = html;
+}
+
 window.setBidQty = function(q) {
   ldBidQty = q;
   if (gameState && gameState.gs) renderLiarsDice($('#gameContent'), gameState.gs);
@@ -1161,8 +1292,6 @@ const ARCADE_GAMES = [
   { id:'simonSays',  name:'Simon Says',      icon:'🧠', cat:'Quick Play',desc:'Repeat the growing color pattern',               path:'/games/simonSays.html',       hasScore:true },
   { id:'colorMatch', name:'Color Match',     icon:'🎨', cat:'Quick Play',desc:'Pick the display color, not the word',           path:'/games/colorMatch.html',      hasScore:true },
   { id:'hexgl',      name:'HexGL',           icon:'🏎️', cat:'3D Showcase',desc:'Futuristic anti-gravity racing (Wipeout-style)',path:'/games/hexgl/index.html',     hasScore:true },
-  { id:'synthblast', name:'SYNTHBLAST',      icon:'🔫', cat:'3D Showcase',desc:'Retro-futuristic tank shooter with synthwave vibes',path:'/games/synthblast/index.html',hasScore:true },
-  { id:'astray',     name:'Astray',          icon:'🧩', cat:'3D Showcase',desc:'Navigate a 3D maze with physics — tilt to roll',path:'/games/astray/index.html',    hasScore:true },
 ];
 
 function renderArcadeGrid() {
@@ -1573,6 +1702,136 @@ function loadArcadeLeaderboard(game) {
   });
 }
 
+// ── Chat Rooms ───────────────────────────────────────────────
+let currentChatRoom = null;
+let chatRoomsPollTimer = null;
+
+function initChatRoomTabs() {
+  $$('#chatPanelTabs .chat-tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      $$('#chatPanelTabs .chat-tab').forEach(t => t.classList.remove('active'));
+      tab.classList.add('active');
+      const panel = tab.dataset.tab;
+      $('#lobbyChatPanel').style.display = panel === 'lobby' ? '' : 'none';
+      const roomsPanel = $('#chatRoomsPanel');
+      roomsPanel.style.display = panel === 'rooms' ? 'flex' : 'none';
+      if (panel === 'rooms' && !currentChatRoom) loadChatRooms();
+    });
+  });
+}
+
+function loadChatRooms() {
+  fetch('/api/chat-rooms').then(r => r.json()).then(rooms => {
+    renderChatRoomsList(rooms);
+  }).catch(() => {});
+}
+
+function renderChatRoomsList(rooms) {
+  const list = $('#chatRoomsList');
+  const view = $('#chatRoomView');
+  if (currentChatRoom) return;
+  view.style.display = 'none';
+  list.style.display = '';
+  let html = '';
+  rooms.forEach(r => {
+    const expires = new Date(r.expiresAt);
+    const hoursLeft = Math.max(0, Math.round((expires - Date.now()) / 3600000));
+    html += `<div class="chat-room-card" onclick="joinChatRoom('${r.id}', ${r.locked})">
+      <div class="chat-room-card-name">${r.locked ? '🔒 ' : ''}${esc(r.name)}</div>
+      <div class="chat-room-card-meta">
+        <span>by ${esc(r.createdBy)}</span>
+        <span>${r.members} online</span>
+        <span>${hoursLeft}h left</span>
+      </div>
+    </div>`;
+  });
+  if (rooms.length === 0) {
+    html = '<div style="text-align:center;color:var(--text-muted);padding:16px;font-size:.85rem">No chat rooms yet</div>';
+  }
+  list.innerHTML = html + '<button class="chat-room-create-btn" onclick="showCreateChatRoom()">+ Create Chat Room</button>';
+}
+
+window.joinChatRoom = function(roomId, locked) {
+  if (locked) {
+    const pw = prompt('Enter room password:');
+    if (!pw) return;
+    send({ t: 'joinChatRoom', roomId, pw });
+  } else {
+    send({ t: 'joinChatRoom', roomId });
+  }
+};
+
+window.showCreateChatRoom = function() {
+  const name = prompt('Chat room name:');
+  if (!name || !name.trim()) return;
+  const pw = prompt('Password (leave blank for public):');
+  fetch('/api/chat-rooms', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: name.trim(), password: pw || '', username }),
+  }).then(r => r.json()).then(data => {
+    if (data.ok && data.room) {
+      send({ t: 'joinChatRoom', roomId: data.room.id, pw: pw || '' });
+    } else {
+      toast(data.err || 'Failed to create room', true);
+    }
+  }).catch(() => toast('Failed to create room', true));
+};
+
+function enterChatRoom(data) {
+  currentChatRoom = data.room;
+  const list = $('#chatRoomsList');
+  const view = $('#chatRoomView');
+  list.style.display = 'none';
+  view.style.display = 'flex';
+  $('#chatRoomName').textContent = currentChatRoom.name;
+  const expires = new Date(currentChatRoom.expiresAt);
+  const hoursLeft = Math.max(0, Math.round((expires - Date.now()) / 3600000));
+  $('#chatRoomTimer').textContent = `${hoursLeft}h left`;
+  const msgs = $('#chatRoomMessages');
+  msgs.innerHTML = '';
+  if (data.msgs) {
+    data.msgs.forEach(m => appendChatRoomMsg(m));
+  }
+  if (data.members) {
+    const sysMsg = { s: 1, m: `Members: ${data.members.join(', ')}` };
+    appendChatRoomMsg(sysMsg);
+  }
+}
+
+function appendChatRoomMsg(msg) {
+  const el = $('#chatRoomMessages');
+  if (!el) return;
+  const div = document.createElement('div');
+  if (msg.s) {
+    div.className = 'chat-msg system';
+    div.textContent = msg.m;
+  } else {
+    div.className = 'chat-msg';
+    div.innerHTML = `<span class="chat-user" style="color:${hashColor(msg.u || '')}">${esc(msg.u || '')}</span>${esc(msg.m)}`;
+  }
+  el.appendChild(div);
+  while (el.children.length > 200) el.removeChild(el.firstChild);
+  el.scrollTop = el.scrollHeight;
+}
+
+function leaveChatRoom() {
+  if (!currentChatRoom) return;
+  send({ t: 'leaveChatRoom' });
+  currentChatRoom = null;
+  const view = $('#chatRoomView');
+  view.style.display = 'none';
+  loadChatRooms();
+}
+
+function sendChatRoomMsg() {
+  const input = $('#chatRoomInput');
+  const msg = input.value.trim();
+  if (!msg || !currentChatRoom) return;
+  send({ t: 'chatRoomMsg', m: msg });
+  input.value = '';
+}
+
 // ── Rules ────────────────────────────────────────────────────────
 function loadRules(game) {
   fetch(`/rules/${game}.json`).then(r => r.json()).then(data => {
@@ -1661,6 +1920,12 @@ function init() {
   $('#chatInput').addEventListener('keydown', e => { if (e.key === 'Enter') sendChat(); });
   $('#gameChatSendBtn').addEventListener('click', sendChat);
   $('#gameChatInput').addEventListener('keydown', e => { if (e.key === 'Enter') sendChat(); });
+
+  // Chat room controls
+  initChatRoomTabs();
+  $('#chatRoomBackBtn').addEventListener('click', leaveChatRoom);
+  $('#chatRoomSendBtn').addEventListener('click', sendChatRoomMsg);
+  $('#chatRoomInput').addEventListener('keydown', e => { if (e.key === 'Enter') sendChatRoomMsg(); });
 
   // Chat toggle
   $('#chatToggle').addEventListener('click', () => {

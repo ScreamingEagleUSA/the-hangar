@@ -10,6 +10,7 @@ const config = require('./src/config');
 const Chat = require('./src/chat');
 const Leaderboard = require('./src/leaderboard');
 const Lobby = require('./src/lobby');
+const ChatRooms = require('./src/chat-rooms');
 const { handleMessage, handleDisconnect } = require('./src/ws-protocol');
 
 const app = express();
@@ -182,6 +183,27 @@ app.get('/api/arcade-leaderboard', async (req, res) => {
   res.json(data);
 });
 
+// API: Chat rooms
+app.get('/api/chat-rooms', async (req, res) => {
+  const rooms = await ChatRooms.listRooms();
+  res.json(rooms);
+});
+
+app.post('/api/chat-rooms', async (req, res) => {
+  const { name, password, username } = req.body || {};
+  if (!name || !username) return res.status(400).json({ err: 'missing data' });
+  const room = await ChatRooms.createRoom(name, password, username);
+  if (!room) return res.status(500).json({ err: 'failed to create' });
+  res.json({ ok: true, room });
+});
+
+app.delete('/api/chat-rooms/:id', async (req, res) => {
+  const { username } = req.body || {};
+  if (!username) return res.status(400).json({ err: 'missing username' });
+  const ok = await ChatRooms.deleteRoom(req.params.id, username);
+  res.json({ ok });
+});
+
 // 404
 app.use((req, res) => res.status(404).send('Not Found'));
 
@@ -189,6 +211,7 @@ app.use((req, res) => res.status(404).send('Not Found'));
 async function start() {
   await Chat.init(supabase);
   await Leaderboard.init(supabase);
+  await ChatRooms.init(supabase, sendToClient);
   Lobby.init(broadcastAll, sendToClient, disconnectClient);
 
   // Game loop -- must start after Lobby.init() populates rooms

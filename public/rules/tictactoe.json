@@ -1,0 +1,17 @@
+{
+  "overview": "Classic Tic-Tac-Toe — get three in a row to win! Best of 5 rounds (first to 3 wins the match).",
+  "phases": [
+    { "name": "Your Turn", "desc": "Place your mark (X or O) on any empty cell." },
+    { "name": "Round End", "desc": "If someone gets 3 in a row (horizontal, vertical, or diagonal), they score a point. If the board is full with no winner, it's a draw." },
+    { "name": "Match End", "desc": "First player to win 3 rounds wins the match." }
+  ],
+  "winConditions": [
+    "Get three of your marks in a row (horizontal, vertical, or diagonal) to win a round.",
+    "First to 3 round wins takes the match."
+  ],
+  "tips": [
+    "The center cell is the strongest opening move.",
+    "Try to set up 'forks' — two ways to win at once.",
+    "Watch your opponent's moves and block their lines."
+  ]
+}

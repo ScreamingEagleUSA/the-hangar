@@ -1,12 +1,13 @@
 (function() {
 'use strict';
 
-const GAME_NAMES = ['', 'Mafia', 'Spyfall', 'Secret Hitler', "Liar's Dice"];
-const GAME_ICONS = ['', '🐺', '🕵️', '🏛️', '🎲'];
-const GAME_CLASSES = ['', 'mafia', 'spyfall', 'secrethitler', 'liarsdice'];
+const GAME_NAMES = ['', 'Mafia', 'Spyfall', 'Secret Hitler', "Liar's Dice", 'Tic-Tac-Toe', 'Trivia'];
+const GAME_ICONS = ['', '🐺', '🕵️', '🏛️', '🎲', '❌⭕', '🧠'];
+const GAME_CLASSES = ['', 'mafia', 'spyfall', 'secrethitler', 'liarsdice', 'tictactoe', 'trivia'];
 const PHASE_NAMES = ['Waiting', 'Role Reveal', 'Discussion', 'Night', 'Action', 'Voting', 'Result', 'Game Over'];
 const DICE_FACES = ['', '⚀', '⚁', '⚂', '⚃', '⚄', '⚅'];
 const LD_PHASE_NAMES = {1: 'Rolling', 2: 'Bidding', 6: 'Challenge!', 7: 'Game Over'};
+const TTT_SYMBOLS = ['❌', '⭕'];
 const MAFIA_ROLES = ['Villager', 'Mafia', 'Doctor', 'Detective'];
 const SH_ROLES = ['Liberal', 'Fascist', 'Hitler'];
 
@@ -151,6 +152,16 @@ function renderRoom(data) {
     html += renderLiarsDiceScreen(gs, pl, phase);
   }
 
+  // Tic-Tac-Toe spectator view
+  if (gt === 5) {
+    html += renderTicTacToeScreen(gs, pl, phase);
+  }
+
+  // Trivia spectator view
+  if (gt === 6) {
+    html += renderTriviaScreen(gs, pl, phase);
+  }
+
   // SH policy tracks
   if (gt === 3 && gs.lp !== undefined) {
     html += '<div style="display:flex;gap:24px;justify-content:center;margin:16px 0">';
@@ -230,6 +241,69 @@ function renderLiarsDiceScreen(gs, pl, phase) {
   }
   html += '</div>';
 
+  return html;
+}
+
+function renderTicTacToeScreen(gs, pl, phase) {
+  let html = '';
+  if (gs.scores) {
+    html += `<div style="display:flex;align-items:center;justify-content:center;gap:16px;font-size:1.4rem;margin:12px 0">`;
+    html += `<span style="font-weight:700">${pl[0] ? pl[0].u : '?'} ${TTT_SYMBOLS[0]}</span>`;
+    html += `<span style="font-size:2.5rem;font-weight:900;color:var(--accent)">${gs.scores[0]} - ${gs.scores[1]}</span>`;
+    html += `<span style="font-weight:700">${TTT_SYMBOLS[1]} ${pl[1] ? pl[1].u : '?'}</span>`;
+    html += '</div>';
+    html += `<div style="font-size:.9rem;color:var(--muted);text-align:center;margin-bottom:8px">Round ${(gs.round || 0) + 1} — First to 3</div>`;
+  }
+  if (gs.board) {
+    html += '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;width:300px;margin:16px auto">';
+    for (let i = 0; i < 9; i++) {
+      const val = gs.board[i];
+      const winCell = gs.winLine && gs.winLine.includes(i);
+      html += `<div style="aspect-ratio:1;display:flex;align-items:center;justify-content:center;font-size:3rem;border-radius:12px;background:${winCell ? 'rgba(74,222,128,.12)' : 'rgba(255,255,255,.05)'};border:2px solid ${winCell ? 'var(--green)' : 'var(--border)'}">${val >= 0 ? TTT_SYMBOLS[val] : ''}</div>`;
+    }
+    html += '</div>';
+  }
+  if (phase === 4 && gs.turn !== undefined && pl[gs.turn]) {
+    html += `<div style="text-align:center;font-size:1.2rem;color:var(--amber);margin:8px 0">${pl[gs.turn].u}'s turn ${TTT_SYMBOLS[gs.turn]}</div>`;
+  }
+  if (phase === 6 || phase === 7) {
+    if (gs.winner === -2) html += '<div style="text-align:center;font-size:1.4rem;color:var(--amber);margin:8px 0">Draw!</div>';
+    else if (gs.winner >= 0 && pl[gs.winner]) html += `<div style="text-align:center;font-size:1.4rem;color:var(--green);margin:8px 0">${pl[gs.winner].u} wins!</div>`;
+  }
+  return html;
+}
+
+function renderTriviaScreen(gs, pl, phase) {
+  let html = '';
+  if (gs.qTotal) {
+    html += `<div style="text-align:center;font-size:1rem;color:var(--muted);margin-bottom:8px">Question ${(gs.qIdx || 0) + 1} / ${gs.qTotal}</div>`;
+  }
+  if (gs.scores) {
+    html += '<div style="display:flex;gap:16px;justify-content:center;flex-wrap:wrap;margin:12px 0">';
+    pl.forEach((p, i) => {
+      html += `<div style="padding:10px 16px;border-radius:12px;background:rgba(255,255,255,.03);border:1px solid var(--border);text-align:center">`;
+      html += `<div style="font-size:1rem;font-weight:700">${p.u}</div>`;
+      html += `<div style="font-size:2rem;font-weight:900;color:var(--accent)">${gs.scores[i]}</div>`;
+      html += '</div>';
+    });
+    html += '</div>';
+  }
+  if (gs.question) {
+    html += `<div style="text-align:center;font-size:1.6rem;font-weight:700;margin:20px 0;line-height:1.3">${gs.question}</div>`;
+    if (gs.options) {
+      const letters = ['A', 'B', 'C', 'D'];
+      html += '<div style="display:flex;flex-wrap:wrap;gap:12px;justify-content:center;margin:16px 0">';
+      gs.options.forEach((opt, i) => {
+        let bg = 'rgba(255,255,255,.04)';
+        let border = 'var(--border)';
+        if (gs.correct !== undefined) {
+          if (i === gs.correct) { bg = 'rgba(74,222,128,.15)'; border = 'var(--green)'; }
+        }
+        html += `<div style="padding:14px 20px;border-radius:12px;background:${bg};border:2px solid ${border};font-size:1.2rem;min-width:200px;text-align:center"><strong>${letters[i]}.</strong> ${opt}</div>`;
+      });
+      html += '</div>';
+    }
+  }
   return html;
 }
 
