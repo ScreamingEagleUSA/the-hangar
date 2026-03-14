@@ -1,0 +1,1233 @@
+<!DOCTYPE html><head>
+  <meta charset="utf-8"/>
+  <title>LittleJS Space Invaders</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <style>
+    html,body{margin:0;height:100%;background:#000;overflow:hidden}
+  </style>
+</head><body>
+<script src="engine/littlejs.min.js"></script>
+<script>
+'use strict';
+
+// engine settings
+debugWatermark = false;
+showEngineVersion = false;
+debugKey = 'Backquote'; // tilde key for debug overlay
+
+// AI can use this class to make sound effects
+class SoundGenerator extends Sound 
+{
+    constructor(params = {})
+    {
+        const {
+            volume = 1,        // Volume scale (percent)
+            randomness = .05,  // How much to randomize frequency (percent Hz)
+            frequency = 220,   // Frequency of sound (Hz)
+            attack = 0,        // Attack time, how fast sound starts (seconds)
+            release = .1,      // Release time, how fast sound fades out (seconds)
+            shapeCurve = 1,    // Squareness of wave (0=square, 1=normal, 2=pointy)
+            slide = 0,         // How much to slide frequency (kHz/s)
+            pitchJump = 0,     // Frequency of pitch jump (Hz)
+            pitchJumpTime = 0, // Time of pitch jump (seconds)
+            repeatTime = 0,    // Resets some parameters periodically (seconds)
+            noise = 0,         // How much random noise to add (percent)
+            bitCrush = 0,      // Resamples at a lower frequency in (samples*100)
+            delay = 0,         // Overlap sound with itself for reverb and flanger effects (seconds)
+        } = params;
+        super([volume, randomness, frequency, attack, 0, release, 0, shapeCurve, slide, 0, pitchJump, pitchJumpTime, repeatTime, noise, 0, bitCrush, delay, 1, 0, 0, 0]);
+    }
+}
+
+// ------------------------------------------------------------
+// Game constants
+
+const levelSize = vec2(60, 34);
+const playMin = vec2(0, 0);
+const playMax = levelSize;
+
+const playerY = 3;
+const barrierY = 8;
+
+// ------------------------------------------------------------
+// Global game state
+
+let player;
+let aliens = [];
+let bullets = [];
+let bombs = [];
+let barriers = [];
+let ufo = null;
+
+let score = 0;
+let hiScore = 0;
+let lives = 3;
+let nextBonusLife = 1000;
+let currentLevel = 1;
+
+let gameOver = false;
+let gameWin = false;
+let titleScreen = true;
+let titleAliens = [];
+let levelAnnounce = 0; // frames to show level announcement
+let respawnTimer = 0; // frames to wait before respawning
+let playerHidden = false; // true when player is dead and waiting to respawn
+let gameOverTimer = 0; // frames before can click to return to title
+let inputMode = 'mouse'; // 'mouse' or 'keyboard'
+let titleTimer = 0;
+
+let invaderDir = 1;
+let invaderSpeed = .08;        // world units per frame (20% slower)
+let invaderDrop = 1.0;         // world units
+let invaderAnimTick = 0;
+
+let alienShootTimer = 0;
+let alienShootMin = 6;          // frames (2x faster firing)
+let alienShootMax = 20;         // frames
+
+let ufoSpawnTimer = 0;
+let marchTimer = 0;
+let marchBeat = 0;
+
+// Sounds
+const sfxShoot    = new SoundGenerator({volume:.22, frequency:520, release:.02, shapeCurve:.4, noise:.15});
+const sfxExplode  = new SoundGenerator({volume:.35, frequency:120, release:.22, noise:.2, shapeCurve:1.6, slide:-.4});
+const sfxHit      = new SoundGenerator({volume:.28, frequency:280, release:.08, shapeCurve:1.2});
+const sfxLoseLife = new SoundGenerator({volume:.40, frequency:180, release:.25, shapeCurve:1.8, slide:-.2});
+const sfxUFO      = new SoundGenerator({volume:.25, frequency:350, release:.2, shapeCurve:.6, slide:.15});
+const sfxBonusLife = new SoundGenerator({volume:.45, frequency:440, release:.35, shapeCurve:.5, pitchJump:220, pitchJumpTime:.1});
+const sfxAlienDeath = new SoundGenerator({volume:.32, frequency:380, release:.12, shapeCurve:1.4, slide:-.3, pitchJump:-80, pitchJumpTime:.05});
+// Marching sounds - 4 alternating notes (higher frequency so they're audible)
+const sfxMarch1   = new SoundGenerator({volume:.25, frequency:180, release:.08, shapeCurve:1.2});
+const sfxMarch2   = new SoundGenerator({volume:.25, frequency:160, release:.08, shapeCurve:1.2});
+const sfxMarch3   = new SoundGenerator({volume:.25, frequency:140, release:.08, shapeCurve:1.2});
+const sfxMarch4   = new SoundGenerator({volume:.25, frequency:120, release:.08, shapeCurve:1.2});
+
+// ------------------------------------------------------------
+// Helpers
+
+function clampToPlayfield(pos, halfSize)
+{
+    pos.x = clamp(pos.x, playMin.x + halfSize.x, playMax.x - halfSize.x);
+    pos.y = clamp(pos.y, playMin.y + halfSize.y, playMax.y - halfSize.y);
+    return pos;
+}
+
+function aabbOverlap(a, b)
+{
+    return isOverlapping(a.pos, a.size, b.pos, b.size);
+}
+
+function randIntInclusive(a, b)
+{
+    return (rand(a, b+1) | 0);
+}
+
+function createExplosion(pos, color, count = 10)
+{
+    // Simple particle explosion using LittleJS ParticleEmitter
+    new ParticleEmitter(
+        pos, 0,                     // pos, angle
+        vec2(0.3),                  // emitSize
+        .1, count * 10,             // emitTime, emitRate
+        PI*2,                       // emitConeAngle
+        undefined,                  // tileInfo
+        color, color,               // colorStartA, colorStartB
+        color.scale(1,0), color.scale(1,0), // colorEndA, colorEndB
+        .4, .35, .08,               // particleTime, sizeStart, sizeEnd
+        .25, 0,                     // speed (reduced), angleSpeed
+        .92, 1,                     // damping, angleDamping
+        0,                          // gravityScale
+        PI, .1, 1                   // cone, fadeRate, randomness
+    );
+}
+
+function goToTitleScreen()
+{
+    // Clean up all game objects
+    engineObjectsDestroy(true);
+    aliens.length = 0;
+    bullets.length = 0;
+    bombs.length = 0;
+    barriers.length = 0;
+    ufo = null;
+    player = null;
+    levelAnnounce = 0;
+    respawnTimer = 0;
+    playerHidden = false;
+    gameOverTimer = 0;
+    initTitleScreen();
+}
+
+function resetInvaderState(resetSpeed = true)
+{
+    // Reset invader movement direction
+    invaderDir = 1;
+    
+    // Only reset speed on new level, not on respawn
+    if (resetSpeed)
+        invaderSpeed = .06 + (currentLevel - 1) * .01;
+    
+    // Reset shooting timers (doubled for slower firing)
+    const levelShootBonus = (currentLevel - 1) * 2;
+    alienShootMin = max(6, 12 - levelShootBonus);
+    alienShootMax = max(20, 40 - levelShootBonus * 2);
+    alienShootTimer = 60; // 1 second delay before enemies shoot
+    
+    // Reset march
+    marchTimer = 40;
+    marchBeat = 0;
+}
+
+function resetGame()
+{
+    // clear objects
+    engineObjectsDestroy(true);
+
+    aliens.length = 0;
+    bullets.length = 0;
+    bombs.length = 0;
+    barriers.length = 0;
+    ufo = null;
+
+    score = 0;
+    lives = 3;
+    nextBonusLife = 1000;
+    currentLevel = 1;
+    gameOver = false;
+    gameWin = false;
+
+    startLevel();
+}
+
+function startLevel()
+{
+    // Clear remaining projectiles
+    for (const b of bullets) b.destroy();
+    for (const bomb of bombs) bomb.destroy();
+    bullets.length = 0;
+    bombs.length = 0;
+    
+    // Destroy old aliens if any
+    for (const a of aliens) a.destroy();
+    aliens.length = 0;
+    
+    // Destroy old barriers
+    for (const br of barriers) br.destroy();
+    barriers.length = 0;
+
+    invaderDrop = 1.0;
+    invaderAnimTick = 0;
+    resetInvaderState();
+    
+    ufoSpawnTimer = randIntInclusive(300, 600);
+
+    if (!player || player.destroyed)
+        player = new Player(vec2(levelSize.x/2, playerY));
+    else
+        player.pos = vec2(levelSize.x/2, playerY);
+    
+    // Show level announcement for 2 seconds (120 frames)
+    levelAnnounce = 120;
+        
+    createBarriers();
+    createAliens();
+}
+
+// ------------------------------------------------------------
+// Objects
+
+class RectObject extends EngineObject
+{
+    constructor(pos, size, color)
+    {
+        super(pos, size);
+        this.color = color || WHITE;
+        this.renderOrder = 0;
+    }
+    render()
+    {
+        drawRect(this.pos, this.size, this.color);
+    }
+}
+
+class Player extends RectObject
+{
+    constructor(pos)
+    {
+        super(pos, vec2(3.2, 1.4), rgb(.2,.9,.95));
+        this.cooldown = 0;
+        this.renderOrder = 10;
+    }
+    update()
+    {
+        if (gameOver || gameWin || levelAnnounce > 0 || respawnTimer > 0)
+            return;
+
+        // Switch to keyboard mode if movement keys pressed
+        if (keyIsDown('ArrowLeft') || keyIsDown('ArrowRight') || keyIsDown('KeyA') || keyIsDown('KeyD'))
+            inputMode = 'keyboard';
+        
+        // Switch to mouse mode if mouse clicked
+        if (mouseWasPressed(0))
+            inputMode = 'mouse';
+        
+        if (inputMode === 'keyboard')
+        {
+            // Keyboard mode - compute direction from keys
+            let move = 0;
+            if (keyIsDown('ArrowLeft') || keyIsDown('KeyA')) move -= 1;
+            if (keyIsDown('ArrowRight') || keyIsDown('KeyD')) move += 1;
+            this.pos.x += move * .55;
+        }
+        else
+        {
+            // Mouse mode - follow mouse X position instantly
+            if (mousePos.x >= playMin.x && mousePos.x <= playMax.x)
+                this.pos.x = mousePos.x;
+        }
+        
+        clampToPlayfield(this.pos, this.size.scale(.5));
+
+        // Shooting - keyboard uses Space/K, mouse uses click
+        if (this.cooldown > 0) this.cooldown--;
+        const wantsShoot = inputMode === 'keyboard' 
+            ? (keyIsDown('Space') || keyIsDown('KeyK'))
+            : mouseIsDown(0);
+        if (this.cooldown === 0 && wantsShoot)
+        {
+            this.cooldown = 20;
+            bullets.push(new Bullet(this.pos.add(vec2(0, 0.1)), vec2(0, 1.2), true));
+            sfxShoot.play(this.pos);
+        }
+    }
+    
+    render()
+    {
+        // Don't draw if hidden (dead, waiting to respawn)
+        if (playerHidden)
+            return;
+        
+        // Classic player ship sprite
+        const p = this.pos;
+        const s = .22;
+        
+        drawRect(p.add(vec2(0,.3)), vec2(s,s*2), this.color); // cannon
+        drawRect(p, vec2(s*7,s*3), this.color); // main body
+        drawRect(p.add(vec2(-1.1,-.3)), vec2(s*2,s), this.color); // left wing
+        drawRect(p.add(vec2(1.1,-.3)), vec2(s*2,s), this.color); // right wing
+    }
+}
+
+class Alien extends RectObject
+{
+    constructor(pos, row)
+    {
+        const colors = [
+            rgb(.95,.2,.2),   // row 0 - red (top)
+            rgb(.2,.95,.2),   // row 1 - green
+            rgb(.25,.85,.95), // row 2 - cyan
+            rgb(.95,.4,.95),  // row 3 - magenta
+            rgb(.95,.95,.2)   // row 4 - yellow (bottom)
+        ];
+        const base = colors[row % 5];
+        super(pos, vec2(2.3, 1.6), base);
+        this.row = row;
+        this.renderOrder = 5;
+        this.flash = 0;
+        this.animOffset = randIntInclusive(0, 15); // stagger animation per alien
+        this.originalPos = pos.copy(); // store spawn position for reset
+    }
+    render()
+    {
+        const frame = ((invaderAnimTick + this.animOffset) >> 3) & 1;
+        
+        // Draw pixelated alien sprites based on row type
+        if (this.row === 0) {
+            // Top row - squid
+            this.renderSquid(frame);
+        } else if (this.row === 1 || this.row === 2) {
+            // Middle rows - crab
+            this.renderCrab(frame);
+        } else {
+            // Bottom rows - octopus
+            this.renderOctopus(frame);
+        }
+
+        if (this.flash)
+        {
+            drawRect(this.pos, this.size.add(vec2(.2,.2)), rgb(1,1,1,.55));
+            this.flash--;
+        }
+    }
+    
+    renderSquid(frame)
+    {
+        const p = this.pos;
+        const s = .22; // pixel size
+        
+        if (frame === 0) {
+            // Frame 1
+            drawRect(p.add(vec2(0,.6)), vec2(s*3,s), this.color); // top
+            drawRect(p.add(vec2(-.6,.3)), vec2(s,s*3), this.color); // left antenna
+            drawRect(p.add(vec2(.6,.3)), vec2(s,s*3), this.color); // right antenna
+            drawRect(p.add(vec2(0,0)), vec2(s*6,s*4), this.color); // body
+            drawRect(p.add(vec2(-0.8,-.5)), vec2(s,s*2), this.color); // legs
+            drawRect(p.add(vec2(-0.3,-.5)), vec2(s,s*2), this.color);
+            drawRect(p.add(vec2(0.3,-.5)), vec2(s,s*2), this.color);
+            drawRect(p.add(vec2(0.8,-.5)), vec2(s,s*2), this.color);
+        } else {
+            // Frame 2
+            drawRect(p.add(vec2(0,.6)), vec2(s*3,s), this.color);
+            drawRect(p.add(vec2(-.6,.3)), vec2(s,s*3), this.color);
+            drawRect(p.add(vec2(.6,.3)), vec2(s,s*3), this.color);
+            drawRect(p.add(vec2(0,0)), vec2(s*6,s*4), this.color);
+            drawRect(p.add(vec2(-0.8,-.4)), vec2(s*2,s), this.color);
+            drawRect(p.add(vec2(0.8,-.4)), vec2(s*2,s), this.color);
+            drawRect(p.add(vec2(-0.3,-.6)), vec2(s*2,s), this.color);
+            drawRect(p.add(vec2(0.3,-.6)), vec2(s*2,s), this.color);
+        }
+    }
+    
+    renderCrab(frame)
+    {
+        const p = this.pos;
+        const s = .22;
+        
+        if (frame === 0) {
+            drawRect(p.add(vec2(-.8,.5)), vec2(s,s*2), this.color); // claws up
+            drawRect(p.add(vec2(.8,.5)), vec2(s,s*2), this.color);
+            drawRect(p.add(vec2(0,.3)), vec2(s*7,s*2), this.color); // top
+            drawRect(p.add(vec2(0,0)), vec2(s*5,s*3), this.color); // body
+            drawRect(p.add(vec2(-0.9,-.3)), vec2(s*2,s), this.color); // legs
+            drawRect(p.add(vec2(-0.4,-.5)), vec2(s*2,s), this.color);
+            drawRect(p.add(vec2(0.4,-.5)), vec2(s*2,s), this.color);
+            drawRect(p.add(vec2(0.9,-.3)), vec2(s*2,s), this.color);
+        } else {
+            drawRect(p.add(vec2(-.8,.3)), vec2(s,s*2), this.color);
+            drawRect(p.add(vec2(.8,.3)), vec2(s,s*2), this.color);
+            drawRect(p.add(vec2(0,.3)), vec2(s*7,s*2), this.color);
+            drawRect(p.add(vec2(0,0)), vec2(s*5,s*3), this.color);
+            drawRect(p.add(vec2(-0.6,-.4)), vec2(s*2,s), this.color);
+            drawRect(p.add(vec2(-0.9,-.5)), vec2(s,s), this.color);
+            drawRect(p.add(vec2(0.6,-.4)), vec2(s*2,s), this.color);
+            drawRect(p.add(vec2(0.9,-.5)), vec2(s,s), this.color);
+        }
+    }
+    
+    renderOctopus(frame)
+    {
+        const p = this.pos;
+        const s = .22;
+        
+        if (frame === 0) {
+            drawRect(p.add(vec2(0,.4)), vec2(s*5,s*3), this.color); // head
+            drawRect(p.add(vec2(-.8,0)), vec2(s,s*3), this.color); // arms
+            drawRect(p.add(vec2(-.3,0)), vec2(s,s*3), this.color);
+            drawRect(p.add(vec2(.3,0)), vec2(s,s*3), this.color);
+            drawRect(p.add(vec2(.8,0)), vec2(s,s*3), this.color);
+            drawRect(p.add(vec2(-0.6,-.4)), vec2(s,s), this.color); // legs bent out
+            drawRect(p.add(vec2(0.6,-.4)), vec2(s,s), this.color);
+        } else {
+            drawRect(p.add(vec2(0,.4)), vec2(s*5,s*3), this.color);
+            drawRect(p.add(vec2(-.8,0)), vec2(s,s*3), this.color);
+            drawRect(p.add(vec2(-.3,0)), vec2(s,s*3), this.color);
+            drawRect(p.add(vec2(.3,0)), vec2(s,s*3), this.color);
+            drawRect(p.add(vec2(.8,0)), vec2(s,s*3), this.color);
+            drawRect(p.add(vec2(-0.4,-.4)), vec2(s,s), this.color); // legs bent in
+            drawRect(p.add(vec2(0.4,-.4)), vec2(s,s), this.color);
+        }
+    }
+}
+
+class Bullet extends RectObject
+{
+    constructor(pos, vel, fromPlayer)
+    {
+        super(pos, fromPlayer ? vec2(.45, 1.0) : vec2(.25, 1.2), fromPlayer ? rgb(.95,.95,.95) : rgb(.95,.3,.3));
+        this.vel = vel; // per frame
+        this.fromPlayer = fromPlayer;
+        this.renderOrder = 20;
+    }
+    update()
+    {
+        this.pos = this.pos.add(this.vel);
+        if (this.pos.y > playMax.y + 2 || this.pos.y < playMin.y - 2)
+            this.destroy();
+    }
+    render()
+    {
+        // Thinner, taller bullets
+        drawRect(this.pos, this.size, this.color);
+    }
+}
+
+class Bomb extends RectObject
+{
+    constructor(pos)
+    {
+        super(pos, vec2(.5, 1.6), rgb(.95,.95,.2)); // Larger, yellow for visibility
+        this.vel = vec2(0, -0.32);
+        this.renderOrder = 20;
+        this.animTick = 0;
+    }
+    update()
+    {
+        if (gameOver || gameWin)
+            return;
+
+        this.pos = this.pos.add(this.vel);
+        this.animTick++;
+        if (this.pos.y < playMin.y - 2)
+            this.destroy();
+    }
+    
+    render()
+    {
+        // Animated bomb - squiggly effect (larger)
+        const frame = (this.animTick >> 2) % 4;
+        const offset = [-.2, -.07, .07, .2][frame];
+        drawRect(this.pos.add(vec2(offset, .5)), vec2(.4, .5), this.color);
+        drawRect(this.pos.add(vec2(-offset, 0)), vec2(.4, .5), this.color);
+        drawRect(this.pos.add(vec2(offset, -.5)), vec2(.4, .5), this.color);
+    }
+}
+
+class BarrierBlock extends RectObject
+{
+    constructor(pos)
+    {
+        super(pos, vec2(.95,.95), rgb(.95,.25,.25));
+        this.renderOrder = 8;
+    }
+}
+
+class UFO extends RectObject
+{
+    constructor()
+    {
+        const dir = rand() < .5 ? 1 : -1;
+        const startX = dir > 0 ? -3 : levelSize.x + 3;
+        super(vec2(startX, levelSize.y - 2), vec2(3, 1.4), rgb(.95,.25,.25));
+        this.velocity = vec2(dir * .08, 0);
+        this.renderOrder = 15;
+        this.pointValue = [50, 100, 150, 300][randIntInclusive(0, 3)];
+        this.showPoints = 0;
+        this.soundTimer = 0;
+    }
+    
+    update()
+    {
+        if (this.showPoints > 0)
+        {
+            this.showPoints--;
+            if (this.showPoints === 0)
+                this.destroy();
+            return;
+        }
+        
+        this.pos = this.pos.add(this.velocity);
+        
+        // Play UFO sound every ~60 frames (1 second)
+        this.soundTimer++;
+        if (this.soundTimer >= 60)
+        {
+            this.soundTimer = 0;
+            sfxUFO.play(this.pos);
+        }
+        
+        if (this.pos.x < -5 || this.pos.x > levelSize.x + 5)
+            this.destroy();
+    }
+    
+    render()
+    {
+        const p = this.pos;
+        const s = .22;
+        const t = time * 5; // animation timer
+        
+        // Main saucer body - layered for depth
+        drawRect(p.add(vec2(0,.3)), vec2(s*6, s*2), this.color);
+        drawRect(p, vec2(s*12, s*2), this.color);
+        drawRect(p.add(vec2(0,-.2)), vec2(s*8, s*2), rgb(.7,.15,.15));
+        
+        // Flashing lights around the edge
+        const lightColors = [rgb(1,1,0), rgb(0,1,1), rgb(1,0,1), rgb(0,1,0)];
+        for (let i = 0; i < 4; i++)
+        {
+            const offset = (i - 1.5) * 0.55;
+            const flash = Math.sin(t + i * 1.5) > 0 ? 1 : 0.3;
+            const col = lightColors[i].scale(flash, 1);
+            drawRect(p.add(vec2(offset, -.15)), vec2(s*1.2, s*1.2), col);
+        }
+        
+        // Bottom glow/beam effect
+        const beamAlpha = 0.3 + Math.sin(t * 2) * 0.15;
+        drawRect(p.add(vec2(0,-.4)), vec2(s*4, s), new Color(.2,.8,1,beamAlpha));
+    }
+}
+
+// ------------------------------------------------------------
+// Level creation
+
+function createAliens()
+{
+    const cols = 11;
+    const rows = 5;
+    const startX = levelSize.x/2 - (cols-1)*2.8/2;
+    const startY = levelSize.y - 6;
+    const spacing = vec2(2.8, 2.3);
+
+    for (let r=0; r<rows; r++)
+    for (let c=0; c<cols; c++)
+    {
+        const p = vec2(startX + c*spacing.x, startY - r*spacing.y);
+        aliens.push(new Alien(p, r));
+    }
+}
+
+function createBarriers()
+{
+    const barrierCount = 4;
+    const gap = levelSize.x/(barrierCount+1);
+
+    for (let i=1; i<=barrierCount; i++)
+    {
+        const cx = gap*i;
+        const cy = barrierY;
+
+        // blocky classic shield shape - arch at top
+        const w = 8;
+        const h = 5;
+        for (let y=0; y<h; y++)
+        for (let x=0; x<w; x++)
+        {
+            // carve arch at the TOP (flipped vertically)
+            const notch = (y===h-1 && (x===0||x===w-1)) ||
+                          (y===h-2 && (x===0||x===w-1)) ||
+                          (y<=1 && (x===3 || x===4) && y===0);
+            if (notch) continue;
+
+            const px = cx + (x - (w-1)/2)*1.0;
+            const py = cy + (y - (h-1)/2)*1.0;
+            const b = new BarrierBlock(vec2(px, py));
+            barriers.push(b);
+        }
+    }
+}
+
+// ------------------------------------------------------------
+// Game loop
+
+function gameInit()
+{
+    setCanvasFixedSize(vec2(960, 540));
+    setCameraPos(levelSize.scale(.5));
+    cameraScale = 16; // pixels per world unit
+    
+    // Initialize title screen aliens
+    initTitleScreen();
+}
+
+function initTitleScreen()
+{
+    titleScreen = true;
+    titleTimer = 0;
+    titleAliens = [];
+    
+    // Create floating aliens for title screen using real Alien objects
+    for (let i = 0; i < 15; i++)
+    {
+        const row = randIntInclusive(0, 4);
+        const worldX = rand(5, 55);
+        const worldY = rand(20, 32);
+        const alien = new Alien(vec2(worldX, worldY), row);
+        alien.titleSpeed = rand(0.02, 0.06);
+        alien.titlePhase = rand(0, PI*2);
+        alien.titleScale = rand(0.8, 1.4);
+        titleAliens.push(alien);
+    }
+}
+
+function gameUpdate()
+{
+    // Title screen
+    if (titleScreen)
+    {
+        titleTimer++;
+        invaderAnimTick++; // Keep animation running
+        
+        // Update floating aliens (real Alien objects)
+        for (const a of titleAliens)
+        {
+            a.pos.x += a.titleSpeed;
+            a.pos.y += Math.sin(titleTimer * 0.02 + a.titlePhase) * 0.02;
+            if (a.pos.x > 65) a.pos.x = -5;
+        }
+        
+        // Start game on Enter or click
+        if (keyWasPressed('Enter') || keyWasPressed('Space') || mouseWasPressed(0))
+        {
+            // Destroy title screen aliens
+            for (const a of titleAliens) a.destroy();
+            titleAliens = [];
+            titleScreen = false;
+            resetGame();
+        }
+        return;
+    }
+    
+    // Game over - click to return to title (after delay)
+    if (gameOver && gameOverTimer <= 0 && (keyWasPressed('Enter') || mouseWasPressed(0)))
+    {
+        goToTitleScreen();
+        return;
+    }
+    if (gameWin && (keyWasPressed('Enter') || mouseWasPressed(0)))
+        resetGame();
+    
+    // Return to title screen with Escape
+    if (keyWasPressed('Escape'))
+    {
+        goToTitleScreen();
+        return;
+    }
+    
+    // Level announcement pause
+    if (levelAnnounce > 0)
+    {
+        levelAnnounce--;
+        invaderAnimTick++; // Keep aliens animating
+        return; // Don't update gameplay during announcement
+    }
+    
+    // Respawn timer - wait before respawning after death
+    if (respawnTimer > 0)
+    {
+        respawnTimer--;
+        invaderAnimTick++; // Keep aliens animating
+        if (respawnTimer === 0)
+        {
+            doRespawn();
+        }
+        return;
+    }
+
+    invaderAnimTick++;
+
+    if (gameOver || gameWin)
+    {
+        if (gameOverTimer > 0) gameOverTimer--;
+        return;
+    }
+
+    updateInvaders();
+    updateUFO();
+    updateCollisions();
+    cleanupArrays();
+    updateMarchingSound();
+
+    // win condition - start next level
+    if (!aliens.length)
+    {
+        currentLevel++;
+        startLevel();
+    }
+    
+    // Debug: hold X to kill enemies quickly for testing
+    if (keyIsDown('KeyX') && aliens.length > 0 && frame % 5 === 0)
+    {
+        const a = aliens[0];
+        createExplosion(a.pos, a.color);
+        a.destroy();
+        score += 10;
+        hiScore = max(hiScore, score);
+        checkBonusLife();
+        sfxAlienDeath.play(a.pos);
+    }
+}
+
+function gameUpdatePost()
+{
+    setCameraPos(levelSize.scale(.5));
+}
+
+function gameRender()
+{
+    // Pure black background
+    drawRect(cameraPos, levelSize.add(vec2(20,20)), rgb(0,0,0));
+
+    if (titleScreen)
+        return; // Title screen renders in gameRenderPost
+
+    // playfield
+    drawRect(cameraPos, levelSize, rgb(0,0,0));
+
+    // Red floor line right below the player
+    drawRect(vec2(levelSize.x/2, playerY - 0.8), vec2(levelSize.x, .15), rgb(1, 0, 0));
+}
+
+function gameRenderPost()
+{
+    // Title screen
+    if (titleScreen)
+    {
+        renderTitleScreen();
+        return;
+    }
+    
+    // Classic arcade HUD
+    const hudY = 30;
+    const color = rgb(.2,.95,.25);
+    
+    // SCORE at top left
+    drawTextScreen('SCORE', vec2(80, hudY), 26, color);
+    drawTextScreen(String(score).padStart(4, '0'), vec2(80, hudY + 32), 26, rgb(.95,.95,.95));
+    
+    // HI-SCORE on top right only
+    drawTextScreen('HI-SCORE', vec2(mainCanvasSize.x - 100, hudY), 26, color);
+    drawTextScreen(String(hiScore).padStart(4, '0'), vec2(mainCanvasSize.x - 100, hudY + 32), 26, rgb(.95,.95,.95));
+    
+    // Lives indicator with ship icons at bottom - below the green line
+    const livesY = mainCanvasSize.y - 18;
+    for (let i = 0; i < lives - 1 && i < 5; i++)
+    {
+        const px = 50 + i * 45;
+        const py = livesY;
+        // Draw mini player ships using filled rectangles via canvas
+        const shipColor = rgb(.2,.9,.95);
+        mainContext.fillStyle = shipColor.toString();
+        mainContext.fillRect(px - 2, py - 8, 4, 6); // cannon
+        mainContext.fillRect(px - 12, py - 2, 24, 8); // body
+        mainContext.fillRect(px - 16, py + 2, 6, 4); // left wing
+        mainContext.fillRect(px + 10, py + 2, 6, 4); // right wing
+    }
+    
+    // Level indicator at bottom right (cyan like player)
+    drawTextScreen(`LEVEL ${currentLevel}`, vec2(mainCanvasSize.x - 80, livesY + 3), 26, rgb(.2,.9,.95));
+
+    // Level announcement
+    if (levelAnnounce > 0)
+    {
+        const pulse = 0.7 + Math.sin(levelAnnounce * 0.15) * 0.3;
+        const announceColor = rgb(.2 * pulse, .95 * pulse, .25 * pulse);
+        drawTextScreen(`LEVEL ${currentLevel}`, vec2(mainCanvasSize.x/2, mainCanvasSize.y/2), 90, announceColor, 10, rgb(0,0,0));
+        
+        // Show "GET READY" below
+        if (levelAnnounce < 90)
+            drawTextScreen('GET READY', vec2(mainCanvasSize.x/2, mainCanvasSize.y/2 + 60), 36, rgb(.95,.95,.95), 6, rgb(0,0,0));
+    }
+    
+    if (gameOver)
+    {
+        drawTextScreen('GAME OVER', vec2(mainCanvasSize.x/2, mainCanvasSize.y/2 - 20), 80, rgb(.95,.25,.25), 8, rgb(0,0,0));
+    }
+    else if (gameWin)
+    {
+        drawTextScreen('YOU WIN!', vec2(mainCanvasSize.x/2, mainCanvasSize.y/2 - 20), 80, rgb(.25,.95,.35), 8, rgb(0,0,0));
+        drawTextScreen('Press Enter', vec2(mainCanvasSize.x/2, mainCanvasSize.y/2 + 45), 34, rgb(.95,.95,.95), 6, rgb(0,0,0));
+    }
+}
+
+// ------------------------------------------------------------
+// Title Screen
+
+function renderTitleScreen()
+{
+    const ctx = mainContext;
+    const w = mainCanvasSize.x;
+    const h = mainCanvasSize.y;
+    const t = titleTimer * 0.02;
+    
+    // Stars (drawn on top since aliens render via engine)
+    for (let i = 0; i < 80; i++)
+    {
+        const sx = (i ** 3 * 127.3 + titleTimer * (0.2 + (i % 3) * 0.1)) % w;
+        const sy = (i * 83.3) % h;
+        const brightness = 0.3 + 0.7 * ((i * 37) % 100) / 100;
+        ctx.fillStyle = `rgba(255,255,255,${brightness})`;
+        ctx.fillRect(sx, sy, 2, 2);
+    }
+    
+    // Planet ring (back half - drawn before planet)
+    ctx.strokeStyle = '#96c896';
+    ctx.lineWidth = 6;
+    ctx.beginPath();
+    ctx.ellipse(w * 0.8, h * 0.55, 110, 25, -0.3, PI, PI * 2); // back arc
+    ctx.stroke();
+    
+    // Planet in background (right side)
+    const gradient = ctx.createRadialGradient(w * 0.8, h * 0.55, 0, w * 0.8, h * 0.55, 100);
+    gradient.addColorStop(0, '#4a6');
+    gradient.addColorStop(0.5, '#284');
+    gradient.addColorStop(1, '#051');
+    ctx.fillStyle = gradient;
+    ctx.beginPath();
+    ctx.arc(w * 0.8, h * 0.55, 80, 0, PI * 2);
+    ctx.fill();
+    
+    // Planet ring (front half - drawn after planet)
+    ctx.strokeStyle = '#96c896';
+    ctx.lineWidth = 6;
+    ctx.beginPath();
+    ctx.ellipse(w * 0.8, h * 0.55, 110, 25, -0.3, 0, PI); // front arc
+    ctx.stroke();
+    
+    // Player ship in foreground (large, bottom left)
+    const shipX = w * 0.22;
+    const shipY = h * 0.72;
+    const shipBob = Math.sin(t * 2) * 5;
+    
+    ctx.fillStyle = '#3ee';
+    // Cannon
+    ctx.fillRect(shipX - 5, shipY - 50 + shipBob, 10, 30);
+    // Main body
+    ctx.fillRect(shipX - 55, shipY - 20 + shipBob, 110, 35);
+    // Wings
+    ctx.fillRect(shipX - 75, shipY + 5 + shipBob, 28, 14);
+    ctx.fillRect(shipX + 47, shipY + 5 + shipBob, 28, 14);
+    // Engine glow
+    const glowAlpha = 0.5 + Math.sin(t * 8) * 0.3;
+    ctx.fillStyle = `rgba(100,200,255,${glowAlpha})`;
+    ctx.fillRect(shipX - 35, shipY + 18 + shipBob, 22, 10);
+    ctx.fillRect(shipX + 13, shipY + 18 + shipBob, 22, 10);
+    
+    // Title text with glow
+    const titleY = 90;
+    const pulse = 0.8 + Math.sin(t * 3) * 0.2;
+    
+    // Glow effect
+    ctx.shadowColor = '#0f0';
+    ctx.shadowBlur = 20 * pulse;
+    
+    // SPACE
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 72px Arial';
+    ctx.textAlign = 'center';
+    ctx.fillText('LITTLEJS', w/2, titleY);
+    
+    // INVADERS
+    ctx.fillStyle = '#3f3';
+    ctx.font = 'bold 84px Arial';
+    ctx.fillText('INVADERS', w/2, titleY + 80);
+    
+    ctx.shadowBlur = 0;
+    
+    // Press Start text (blinking)
+    if ((titleTimer >> 5) & 1)
+    {
+        ctx.fillStyle = '#ff0';
+        ctx.font = 'bold 32px Arial';
+        ctx.fillText('CLICK TO START', w/2, h - 50);
+    }
+}
+
+// ------------------------------------------------------------
+// Invaders movement + shooting
+
+function updateInvaders()
+{
+    if (!aliens.length)
+        return;
+
+    // compute formation bounds
+    let minX = 1e9, maxX = -1e9, minY = 1e9;
+    for (const a of aliens)
+    {
+        const half = a.size.x/2;
+        minX = min(minX, a.pos.x - half);
+        maxX = max(maxX, a.pos.x + half);
+        minY = min(minY, a.pos.y - a.size.y/2);
+    }
+
+    const nextMinX = minX + invaderDir * invaderSpeed;
+    const nextMaxX = maxX + invaderDir * invaderSpeed;
+
+    let hitEdge = false;
+    if (nextMinX < playMin.x + 1.2) hitEdge = true;
+    if (nextMaxX > playMax.x - 1.2) hitEdge = true;
+
+    if (hitEdge)
+    {
+        invaderDir *= -1;
+        for (const a of aliens)
+            a.pos.y -= invaderDrop;
+
+        // speed up as they descend
+        invaderSpeed = min(invaderSpeed + .02, .5);
+        alienShootMin = max(alienShootMin - 1, 3);
+        alienShootMax = max(alienShootMax - 2, 8);
+    }
+    else
+    {
+        // Speed scales inversely with remaining aliens (like original)
+        // Uses fourth root so speed increase is more gradual
+        const aliveCount = aliens.length;
+        const speedMultiplier = Math.pow(55 / aliveCount, 0.25); // max ~2.7x at 1 alien
+        for (const a of aliens)
+            a.pos.x += invaderDir * invaderSpeed * speedMultiplier;
+    }
+
+    // lose if invaders reach the player line
+    if (minY < playerY + 2.5)
+        doGameOver();
+
+    // Check if aliens are touching barriers - destroy any barrier blocks they touch
+    for (const a of aliens)
+    {
+        if (a.destroyed) continue;
+        for (const br of barriers)
+        {
+            if (br.destroyed) continue;
+            if (aabbOverlap(a, br))
+            {
+                br.destroy();
+            }
+        }
+    }
+
+    // invader shooting - scale rate by number of aliens alive
+    if (alienShootTimer > 0) alienShootTimer--;
+    if (alienShootTimer === 0)
+    {
+        alienFire();
+        // Fewer aliens = slower shooting (scales linearly with alien count)
+        const aliveCount = aliens.length;
+        const shootScale = max(0.2, aliveCount / 55); // 20% rate minimum when few aliens
+        const scaledMin = alienShootMin / shootScale;
+        const scaledMax = alienShootMax / shootScale;
+        alienShootTimer = randIntInclusive(scaledMin, scaledMax);
+    }
+}
+
+function updateUFO()
+{
+    // Spawn UFO randomly
+    if (!ufo || ufo.destroyed)
+    {
+        ufoSpawnTimer--;
+        if (ufoSpawnTimer <= 0)
+        {
+            ufo = new UFO();
+            ufoSpawnTimer = randIntInclusive(600, 1200); // 10-20 seconds
+            sfxUFO.play(ufo.pos);
+        }
+    }
+}
+
+function updateMarchingSound()
+{
+    if (!aliens.length) return;
+    
+    // Speed up marching based on number of aliens left
+    const aliveCount = aliens.length;
+    const maxDelay = 40;
+    const minDelay = 8;
+    const delay = max(minDelay, maxDelay - (55 - aliveCount));
+    
+    marchTimer--;
+    if (marchTimer <= 0)
+    {
+        marchTimer = delay;
+        const sounds = [sfxMarch1, sfxMarch2, sfxMarch3, sfxMarch4];
+        // Use center of alien formation for positional audio
+        const centerPos = vec2(levelSize.x/2, levelSize.y/2);
+        sounds[marchBeat % 4].play(centerPos);
+        marchBeat++;
+    }
+}
+
+function alienFire()
+{
+    if (!aliens.length)
+        return;
+
+    // pick a random column from the alive aliens, then choose the lowest one in that column
+    const colSize = 2.8;
+    const cols = {};
+    for (const a of aliens)
+    {
+        const col = (a.pos.x / colSize) | 0;
+        const best = cols[col];
+        if (!best || a.pos.y < best.pos.y)
+            cols[col] = a;
+    }
+
+    const keys = Object.keys(cols);
+    if (!keys.length)
+        return;
+
+    const pick = cols[keys[(rand(0, keys.length) | 0)]];
+    bombs.push(new Bomb(pick.pos.add(vec2(0, -1.2))));
+}
+
+// ------------------------------------------------------------
+// Collisions
+
+function updateCollisions()
+{
+    // bullets vs aliens/barriers/UFO
+    for (const b of bullets)
+    {
+        if (b.destroyed) continue;
+
+        // vs UFO
+        if (ufo && !ufo.destroyed && aabbOverlap(b, ufo))
+        {
+            b.destroy();
+            score += ufo.pointValue;
+            hiScore = max(hiScore, score);
+            checkBonusLife();
+            createExplosion(ufo.pos, rgb(.95,.25,.25), 20); // more particles for UFO
+            ufo.destroy();
+            sfxExplode.play(ufo.pos);
+            continue;
+        }
+
+        // vs aliens
+        for (const a of aliens)
+        {
+            if (a.destroyed) continue;
+            if (!aabbOverlap(b, a)) continue;
+
+            b.destroy();
+            a.flash = 6;
+            createExplosion(a.pos, a.color);
+            a.destroy();
+            score += 10;
+            hiScore = max(hiScore, score);
+            checkBonusLife();
+            sfxAlienDeath.play(a.pos);
+            break;
+        }
+
+        if (b.destroyed) continue;
+
+        // vs barriers
+        for (const br of barriers)
+        {
+            if (br.destroyed) continue;
+            if (!aabbOverlap(b, br)) continue;
+            b.destroy();
+            br.destroy();
+            sfxHit.play(br.pos);
+            break;
+        }
+    }
+
+    // bombs vs player/barriers
+    for (const bomb of bombs)
+    {
+        if (bomb.destroyed) continue;
+
+        // vs player
+        if (player && !player.destroyed && aabbOverlap(bomb, player))
+        {
+            bomb.destroy();
+            loseLife();
+            continue;
+        }
+
+        // vs barriers
+        for (const br of barriers)
+        {
+            if (br.destroyed) continue;
+            if (!aabbOverlap(bomb, br)) continue;
+            bomb.destroy();
+            br.destroy();
+            sfxHit.play(br.pos);
+            break;
+        }
+    }
+}
+
+function loseLife()
+{
+    lives--;
+    createExplosion(player.pos, rgb(.2,.9,.95), 20);
+    sfxLoseLife.play(player.pos);
+
+    if (lives <= 0)
+    {
+        doGameOver();
+        return;
+    }
+
+    // Clear all projectiles
+    for (const b of bullets) b.destroy();
+    for (const bomb of bombs) bomb.destroy();
+    bullets.length = 0;
+    bombs.length = 0;
+    
+    // Destroy UFO if present
+    if (ufo && !ufo.destroyed)
+    {
+        ufo.destroy();
+        ufo = null;
+    }
+    
+    // Hide player during respawn wait (don't move them, just hide)
+    playerHidden = true;
+    
+    // Start respawn timer (2 seconds = 120 frames)
+    respawnTimer = 120;
+}
+
+function doRespawn()
+{
+    // Reset UFO timer
+    ufoSpawnTimer = randIntInclusive(300, 600);
+    
+    // Reset all remaining aliens to their original spawn positions
+    for (const a of aliens)
+    {
+        if (!a.destroyed)
+            a.pos = a.originalPos.copy();
+    }
+    
+    resetInvaderState(false); // Keep current speed based on aliens killed
+    
+    // Respawn player at center
+    player.pos = vec2(levelSize.x/2, playerY);
+    player.cooldown = 30; // brief cooldown
+    playerHidden = false; // show player again
+    
+    // Show level announcement again (player must wait before shooting)
+    levelAnnounce = 120;
+}
+
+function doGameOver()
+{
+    if (gameOver) return;
+    gameOver = true;
+    gameOverTimer = 120; // 2 second delay before can click
+    createExplosion(player.pos, rgb(.2,.9,.95), 25);
+    sfxExplode.play(player.pos);
+}
+
+function checkBonusLife()
+{
+    if (score >= nextBonusLife)
+    {
+        lives++;
+        nextBonusLife += 1000; // Next bonus at +1000 points
+        sfxBonusLife.play(player.pos);
+    }
+}
+
+function cleanupArrays()
+{
+    // remove destroyed references
+    aliens = aliens.filter(o=>!o.destroyed);
+    bullets = bullets.filter(o=>!o.destroyed);
+    bombs = bombs.filter(o=>!o.destroyed);
+    barriers = barriers.filter(o=>!o.destroyed);
+}
+
+// ------------------------------------------------------------
+// Start engine
+engineInit(gameInit, gameUpdate, gameUpdatePost, gameRender, gameRenderPost);
+
+</script>
+<script>(function(){const G='spaceInvaders';let r=false;setInterval(()=>{if(typeof gameOver!=='undefined'&&gameOver&&!r&&score>0){r=true;try{parent.postMessage({type:'arcade-score',game:G,score:score},'*')}catch(e){}}if(typeof gameOver!=='undefined'&&!gameOver)r=false},500)})();</script>
+</body>

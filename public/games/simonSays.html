@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Simon Says</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#1a1d27;color:#e8eaed;font-family:system-ui,-apple-system,sans-serif;display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;overflow:hidden}
+h1{font-size:2rem;margin-bottom:8px}
+.info{color:#9ca3af;margin-bottom:20px;font-size:.9rem}
+.board{display:grid;grid-template-columns:1fr 1fr;gap:8px;width:min(320px,85vw);aspect-ratio:1;margin-bottom:24px}
+.pad{border-radius:16px;cursor:pointer;opacity:.5;transition:opacity .1s,transform .1s;border:none}
+.pad:active{transform:scale(.95)}
+.pad.lit{opacity:1;transform:scale(1.05)}
+.pad.red{background:#ef4444}.pad.green{background:#22c55e}.pad.blue{background:#3b82f6}.pad.yellow{background:#eab308}
+.hud{font-size:1.4rem;font-weight:700;margin-bottom:16px}
+.hud span{color:#fbbf24}
+.msg{font-size:1rem;color:#a78bfa;min-height:28px;margin-bottom:12px;font-weight:600}
+button.play{background:#5b7fff;color:#fff;border:none;padding:14px 40px;border-radius:12px;font-size:1.1rem;font-weight:700;cursor:pointer}
+button.play:hover{background:#4a6ee6}
+.end-screen{text-align:center;display:none}
+.end-screen .final{font-size:3rem;color:#4ade80;font-weight:800;margin:12px 0}
+</style>
+</head>
+<body>
+<h1>🧠 Simon Says</h1>
+<p class="info">Watch the pattern, then repeat it!</p>
+<div class="hud">Round: <span id="round">0</span></div>
+<div id="msg" class="msg"></div>
+<div class="board" id="board">
+  <div class="pad green" data-idx="0"></div>
+  <div class="pad red" data-idx="1"></div>
+  <div class="pad yellow" data-idx="2"></div>
+  <div class="pad blue" data-idx="3"></div>
+</div>
+<button class="play" id="startBtn" onclick="startGame()">Start</button>
+<div id="endScreen" class="end-screen">
+  <h1>Game Over!</h1>
+  <div class="final" id="finalScore">0</div>
+  <p style="color:#9ca3af;margin-bottom:20px">rounds completed</p>
+  <button class="play" onclick="startGame()">Play Again</button>
+</div>
+<script>
+const GAME_ID='simonSays',pads=document.querySelectorAll('.pad'),msgEl=document.getElementById('msg'),roundEl=document.getElementById('round');
+const audioCtx=new(window.AudioContext||window.webkitAudioContext)();
+const FREQS=[329.63,261.63,220,196];
+let sequence=[],playerIdx=0,playing=false,locked=true,round=0;
+function beep(idx,dur){const o=audioCtx.createOscillator(),g=audioCtx.createGain();o.connect(g);g.connect(audioCtx.destination);o.frequency.value=FREQS[idx];o.type='sine';g.gain.setValueAtTime(.3,audioCtx.currentTime);g.gain.exponentialRampToValueAtTime(.001,audioCtx.currentTime+dur);o.start();o.stop(audioCtx.currentTime+dur)}
+function lightPad(idx,dur=400){return new Promise(r=>{pads[idx].classList.add('lit');beep(idx,.3);setTimeout(()=>{pads[idx].classList.remove('lit');setTimeout(r,100)},dur)})}
+async function playSequence(){locked=true;msgEl.textContent='Watch...';for(const idx of sequence)await lightPad(idx,Math.max(200,500-round*15));msgEl.textContent='Your turn!';locked=false;playerIdx=0}
+function startGame(){round=0;sequence=[];playing=true;locked=true;document.getElementById('startBtn').style.display='none';document.getElementById('endScreen').style.display='none';document.getElementById('board').style.display='grid';nextRound()}
+function nextRound(){round++;roundEl.textContent=round;sequence.push(Math.floor(Math.random()*4));playSequence()}
+function endGame(){playing=false;locked=true;msgEl.textContent='';document.getElementById('board').style.display='none';document.getElementById('endScreen').style.display='block';document.getElementById('finalScore').textContent=round-1;try{parent.postMessage({type:'arcade-score',game:GAME_ID,score:round-1},'*')}catch(e){}}
+pads.forEach(p=>{p.addEventListener('click',()=>{if(locked||!playing)return;const idx=parseInt(p.dataset.idx);lightPad(idx,200);if(idx!==sequence[playerIdx]){endGame();return}playerIdx++;if(playerIdx>=sequence.length){locked=true;msgEl.textContent='Correct!';setTimeout(nextRound,800)}});p.addEventListener('touchstart',e=>e.preventDefault(),{passive:false})});
+</script>
+</body>
+</html>

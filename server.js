@@ -166,6 +166,22 @@ app.get('/api/reactions', (req, res) => {
   res.json(recent);
 });
 
+// API: Arcade score (best per user per game)
+app.post('/api/arcade-score', async (req, res) => {
+  const { u, game, score } = req.body || {};
+  if (!u || !game || score === undefined) return res.status(400).json({ err: 'missing data' });
+  await Leaderboard.recordArcadeScore(u, game, score);
+  res.json({ ok: true });
+});
+
+// API: Arcade leaderboard for a specific game
+app.get('/api/arcade-leaderboard', async (req, res) => {
+  const game = req.query.game;
+  if (!game) return res.status(400).json({ err: 'missing game' });
+  const data = await Leaderboard.getArcadeLeaderboard(game);
+  res.json(data);
+});
+
 // 404
 app.use((req, res) => res.status(404).send('Not Found'));
 

@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Whac-A-Mole</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#1a1d27;color:#e8eaed;font-family:system-ui,-apple-system,sans-serif;display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;overflow:hidden}
+.hud{display:flex;gap:30px;margin-bottom:20px;font-size:1.2rem;font-weight:700}
+.hud span{color:#fbbf24}
+.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;max-width:360px;width:90vw}
+.hole{position:relative;width:100%;aspect-ratio:1;background:radial-gradient(ellipse at bottom,#2a1a0a 60%,#1a1d27 100%);border-radius:50%;cursor:pointer;overflow:hidden;border:3px solid #3a3d47;transition:border-color .1s}
+.hole:active{border-color:#fbbf24}
+.mole{position:absolute;bottom:-80%;left:50%;transform:translateX(-50%);width:70%;height:70%;border-radius:50% 50% 40% 40%;background:linear-gradient(135deg,#8B6914,#6B4E12);transition:bottom .15s ease-out;display:flex;align-items:center;justify-content:center;font-size:2rem}
+.mole.up{bottom:15%}
+.mole.bonked{bottom:15%;background:linear-gradient(135deg,#f87171,#dc2626)}
+.start-screen,.end-screen{text-align:center}
+.start-screen h1,.end-screen h1{font-size:2.5rem;margin-bottom:16px}
+.start-screen p,.end-screen p{color:#9ca3af;margin-bottom:24px}
+.end-screen .final{font-size:3rem;color:#4ade80;font-weight:800;margin:12px 0}
+button.play{background:#5b7fff;color:#fff;border:none;padding:14px 40px;border-radius:12px;font-size:1.1rem;font-weight:700;cursor:pointer}
+button.play:hover{background:#4a6ee6}
+</style>
+</head>
+<body>
+<div id="startScreen" class="start-screen">
+  <h1>🔨 Whac-A-Mole</h1>
+  <p>Whack as many moles as you can in 30 seconds!</p>
+  <button class="play" onclick="startGame()">Play</button>
+</div>
+<div id="gameArea" style="display:none">
+  <div class="hud">
+    <div>Score: <span id="score">0</span></div>
+    <div>Time: <span id="timer">30</span>s</div>
+  </div>
+  <div class="grid" id="grid"></div>
+</div>
+<div id="endScreen" class="end-screen" style="display:none">
+  <h1>Time's Up!</h1>
+  <div class="final" id="finalScore">0</div>
+  <p>moles whacked</p>
+  <button class="play" onclick="startGame()">Play Again</button>
+</div>
+<script>
+const GAME_ID='whacAMole';let score=0,timeLeft=30,interval=null,moleTimeout=null,activeMole=-1;
+const grid=document.getElementById('grid'),scoreEl=document.getElementById('score'),timerEl=document.getElementById('timer');
+for(let i=0;i<9;i++){const h=document.createElement('div');h.className='hole';h.innerHTML='<div class="mole" id="mole'+i+'">🐹</div>';h.addEventListener('click',()=>whack(i));h.addEventListener('touchstart',e=>{e.preventDefault();whack(i)},{passive:false});grid.appendChild(h)}
+function startGame(){score=0;timeLeft=30;scoreEl.textContent='0';timerEl.textContent='30';document.getElementById('startScreen').style.display='none';document.getElementById('endScreen').style.display='none';document.getElementById('gameArea').style.display='flex';document.getElementById('gameArea').style.flexDirection='column';document.getElementById('gameArea').style.alignItems='center';showMole();interval=setInterval(()=>{timeLeft--;timerEl.textContent=timeLeft;if(timeLeft<=0)endGame()},1000)}
+function showMole(){document.querySelectorAll('.mole').forEach(m=>{m.classList.remove('up','bonked')});const r=Math.floor(Math.random()*9);activeMole=r;document.getElementById('mole'+r).classList.add('up');const dur=Math.max(500,1200-score*20);moleTimeout=setTimeout(()=>{document.getElementById('mole'+r).classList.remove('up');if(timeLeft>0)showMole()},dur)}
+function whack(i){if(i!==activeMole)return;score++;scoreEl.textContent=score;const m=document.getElementById('mole'+i);m.classList.add('bonked');m.textContent='💫';setTimeout(()=>{m.classList.remove('up','bonked');m.textContent='🐹'},200);clearTimeout(moleTimeout);activeMole=-1;if(timeLeft>0)setTimeout(showMole,300)}
+function endGame(){clearInterval(interval);clearTimeout(moleTimeout);document.querySelectorAll('.mole').forEach(m=>m.classList.remove('up','bonked'));document.getElementById('gameArea').style.display='none';document.getElementById('endScreen').style.display='block';document.getElementById('finalScore').textContent=score;try{parent.postMessage({type:'arcade-score',game:GAME_ID,score:score},'*')}catch(e){}}
+</script>
+</body>
+</html>

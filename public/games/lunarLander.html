@@ -1,0 +1,477 @@
+<!DOCTYPE html><head>
+<title>LittleJS AI Starter Project</title>
+<meta charset=utf-8>
+</head><body style="background:#000">
+<script src="engine/littlejs.min.js"></script>
+<script>
+'use strict';
+
+// engine settings, do not remove
+debugWatermark = false; // Hide debug watermark in corner
+showEngineVersion = false; // Hide engine version console display
+
+// AI can use this class to make sound effects
+class SoundGenerator extends Sound 
+{
+    constructor(params = {})
+    {
+        const {
+            volume = 1,        // Volume scale (percent)
+            randomness = .05,  // How much to randomize frequency (percent Hz)
+            frequency = 220,   // Frequency of sound (Hz)
+            attack = 0,        // Attack time, how fast sound starts (seconds)
+            release = .1,      // Release time, how fast sound fades out (seconds)
+            shapeCurve = 1,    // Squarenes of wave (0=square, 1=normal, 2=pointy)
+            slide = 0,         // How much to slide frequency (kHz/s)
+            pitchJump = 0,     // Frequency of pitch jump (Hz)
+            pitchJumpTime = 0, // Time of pitch jump (seconds)
+            repeatTime = 0,    // Resets some parameters periodically (seconds)
+            noise = 0,         // How much random noise to add (percent)
+            bitCrush = 0,      // Resamples at a lower frequency in (samples*100)
+            delay = 0,         // Overlap sound with itself for reverb and flanger effects (seconds)
+        } = params;
+        
+        super([volume, randomness, frequency, attack, 0, release, 0, shapeCurve, slide, 0, pitchJump, pitchJumpTime, repeatTime, noise, 0, bitCrush, delay, 1, 0, 0, 0]);
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////////
+// Lunar Lander (solid-color primitives only)
+
+// Tuning
+const WORLD_HALF_WIDTH = 32;
+const SEGMENTS = 36;
+const SEGMENT_W = (WORLD_HALF_WIDTH*2)/SEGMENTS;
+
+// Landing pad
+const PAD_WIDTH = 6;
+const PAD_THICK = .5;
+
+const GRAVITY_Y = -.0012;          // moon-ish
+const THRUST_POWER = .0030;        // main engine
+const TURN_POWER = .0022;          // angular accel
+const MAX_FUEL = 100;
+
+const SAFE_SPEED = .10;
+const SAFE_ANGLE = .22;            // radians (~12.6°)
+
+// Camera tuning (cameraScale = pixels per world unit; smaller = zoomed out)
+const CAMERA_SCALE_FAR  = 22;      // start / wide view
+const CAMERA_SCALE_NEAR = 60;      // close-up near pad
+
+// Zoom behavior: stay FAR until you're within OUT_DIST of the pad,
+// then blend to NEAR as you approach IN_DIST.
+const CAMERA_ZOOM_IN_DIST  = 8;    // fully zoomed in inside this distance
+const CAMERA_ZOOM_OUT_DIST = 18;   // start zooming in inside this distance
+
+let player, landingPad;
+let gameState = 0; // 0=playing, 1=landed, 2=crashed
+let score = 0;
+let messageTimer = new Timer();
+let camTarget = vec2();
+let camScale = CAMERA_SCALE_FAR;
+let stars = [];
+
+// Sounds
+const sfxThrust = new SoundGenerator({ volume:.18, frequency:90, release:.08, noise:.25, shapeCurve:.7, slide:-.4, randomness:.15 });
+const sfxBoom   = new SoundGenerator({ volume:.65, frequency:65, release:.35, noise:.6,  shapeCurve:.2, slide:-1.5, bitCrush:3, delay:.04 });
+const sfxLand   = new SoundGenerator({ volume:.35, frequency:520, release:.12, shapeCurve:1.2, pitchJump:-120, pitchJumpTime:.02, delay:.03 });
+
+function resetGame()
+{
+    engineObjectsDestroy();
+    gameState = 0;
+    score = 0;
+    messageTimer.unset();
+
+    // setup level gravity
+    gravity.y = GRAVITY_Y;
+
+    // stars (screen space-ish, but placed in world around camera)
+    stars = [];
+    for (let i=0; i<250; ++i)
+    {
+        // sprinkle stars across a big region
+        stars.push({
+            pos: vec2(rand(WORLD_HALF_WIDTH*3, -WORLD_HALF_WIDTH*3), rand(60, -10)),
+            s: rand(.06, .02),
+            a: rand(1, .3),
+        });
+    }
+
+    // pick a landing pad spot (quantize to terrain grid so it's always perfectly safe)
+    let padX = rand(WORLD_HALF_WIDTH-8, -WORLD_HALF_WIDTH+8);
+    padX = Math.round(padX/SEGMENT_W)*SEGMENT_W;
+    const padY = -6 + rand(1.2, -1.2); // this is the ground surface Y at the pad
+
+    // create mountainous terrain columns, leaving a flat gap for the pad
+    // (random walk + occasional ridges)
+    let y = padY;
+    for (let i=0; i<SEGMENTS; ++i)
+    {
+        const x = -WORLD_HALF_WIDTH + (i+.5)*SEGMENT_W;
+
+        // stronger random walk for mountainy terrain
+        y += rand(6.2, -6.2);
+
+        // occasional ridge spikes
+        if (rand() < .12)
+            y += rand(10, -10);
+
+        // soften just enough to keep it playable
+        y *= .62;
+        y = clamp(y, -19, 3);
+
+        // carve out a perfectly-flat landing zone around the pad
+        const distToPad = abs(x - padX);
+        const zoneHalfW = PAD_WIDTH/2 + SEGMENT_W*1.2;
+        if (distToPad < zoneHalfW)
+        {
+            // exact match to pad surface
+            y = padY;
+        }
+        else
+        {
+            // smooth transition into the mountains
+            const t = clamp((distToPad - zoneHalfW)/10, 0, 1);
+            y = lerp(padY, y, smoothStep(t));
+        }
+
+        const topY = y;
+        const depth = 80;
+        const pos = vec2(x, topY - depth/2);
+        const color = hsl(0, 0, .11 + (i%9)*.014);
+        const o = new EngineObject(pos, vec2(SEGMENT_W*1.03, depth), 0, 0, color);
+        o.setCollision();
+        o.mass = 0; // static
+        o.isTerrain = true;
+    }
+
+    // landing pad (sit on top of the ground surface, no overlap)
+    landingPad = new EngineObject(vec2(padX, padY + PAD_THICK/2), vec2(PAD_WIDTH, PAD_THICK), 0, 0, rgb(.2, .9, .35));
+    landingPad.setCollision();
+    landingPad.mass = 0;
+    landingPad.isPad = true;
+
+    // pad beacons
+    for (const sx of [-1, 1])
+    {
+        const beacon = new EngineObject(vec2(padX + sx*(PAD_WIDTH/2), padY + .9), vec2(.35, 1.8), 0, 0, rgb(1,.4,.2));
+        beacon.setCollision();
+        beacon.mass = 0;
+        beacon.isTerrain = true;
+    }
+
+    // player
+    player = new Player(vec2(padX + rand(10,-10), 10));
+
+    // start zoomed out and centered so you can see the overall play area
+    camTarget = player.pos.lerp(landingPad.pos, .5);
+    cameraPos = camTarget.copy();
+    camScale = CAMERA_SCALE_FAR;
+    cameraScale = camScale;
+}
+
+class Debris extends EngineObject
+{
+    constructor(pos, vel, color)
+    {
+        super(pos, vec2(rand(.25,.08)), 0, rand(PI, -PI), color);
+        this.velocity = vel;
+        this.angleVelocity = rand(.25, -.25);
+        this.life = rand(1.2, .5);
+        this.damping = .98;
+        this.angleDamping = .98;
+        this.setCollision(false, false, false, false);
+    }
+
+    update()
+    {
+        this.life -= timeDelta;
+        if (this.life <= 0)
+            this.destroy();
+    }
+
+    render()
+    {
+        const a = clamp(this.life/1.2, 0, 1);
+        drawCircle(this.pos, this.size.x, rgb(this.color.r, this.color.g, this.color.b, a), 0, undefined, true);
+    }
+}
+
+class Player extends EngineObject
+{
+    constructor(pos)
+    {
+        // (pos, size, tileInfo, angle, color)
+        super(pos, vec2(1,2), 0, 0, rgb(.9,.9,.95));
+        this.setCollision();
+        this.angleDamping = .95;
+        this.damping = .995;
+
+        this.fuel = MAX_FUEL;
+        this.thrusting = false;
+        this.thrustSoundTimer = new Timer();
+    }
+
+    isSafeLanding()
+    {
+        return abs(this.angle) < SAFE_ANGLE && this.velocity.length() < SAFE_SPEED;
+    }
+
+    explode()
+    {
+        if (gameState) return;
+        gameState = 2;
+        messageTimer.set(999);
+        sfxBoom.play();
+
+        // debris burst
+        for (let i=0; i<80; ++i)
+        {
+            const v = randVec2(rand(.25, .05)).add(this.velocity.scale(.5));
+            new Debris(this.pos.add(randVec2(rand(.8,.1))), v, randColor(rgb(1,.6,.15), rgb(1,.1,.05), true));
+        }
+
+        this.destroy();
+    }
+
+    update()
+    {
+        if (gameState) return;
+
+        // controls (start from your snippet)
+        const moveInput = keyDirection();
+        this.applyAngularAcceleration(moveInput.x * TURN_POWER);
+
+        // main thrust (Up/W/Space)
+        const thrustHeld = moveInput.y > 0 || keyIsDown('Space');
+        const canThrust = thrustHeld && this.fuel > 0;
+        this.thrusting = canThrust;
+
+        if (canThrust)
+        {
+            const accel = this.getUp(THRUST_POWER);
+            this.applyAcceleration(accel);
+
+            // fuel burn
+            this.fuel = max(0, this.fuel - 18*timeDelta);
+
+            // tiny jitter so hovering isn't too perfect
+            this.applyAcceleration(randVec2(.00015));
+
+            // soft looping thruster sound
+            if (!this.thrustSoundTimer.active())
+            {
+                sfxThrust.play();
+                this.thrustSoundTimer.set(.08);
+            }
+        }
+
+        // out of bounds -> crash
+        if (abs(this.pos.x) > WORLD_HALF_WIDTH + 10 || this.pos.y < -60)
+            this.explode();
+    }
+
+    // landing / crash handling
+    collideWithObject(o)
+    {
+        if (gameState) return true;
+
+        // If we hit the pad and we're safe, we win.
+        if (o && o.isPad)
+        {
+            if (this.isSafeLanding())
+            {
+                gameState = 1;
+                sfxLand.play();
+
+                // gently snap to pad and stop
+                this.angle = 0;
+                this.angleVelocity = 0;
+                this.velocity = vec2();
+                this.pos.y = o.pos.y + o.size.y/2 + this.size.y/2 + .02;
+
+                // score: more fuel + faster landing
+                score = (this.fuel*10|0) + (max(0, 100 - this.velocity.length()*1000)|0);
+                messageTimer.set(999);
+                return true;
+            }
+
+            // otherwise crash
+            this.explode();
+            return true;
+        }
+
+        // any other terrain impact is a crash
+        this.explode();
+        return true;
+    }
+
+    render()
+    {
+        if (this.destroyed) return;
+
+        // body
+        const body = [
+            vec2(-.55,-.9),
+            vec2(.55,-.9),
+            vec2(.38,.35),
+            vec2(0,1),
+            vec2(-.38,.35),
+        ];
+        drawPoly(body, this.color, .08, rgb(0,0,0,.8), this.pos, this.angle);
+
+        // window
+        drawCircle(this.pos.add(vec2(0,.35).rotate(this.angle)), .42, rgb(.35,.6,1,.6), .06, rgb(0,0,0,.8));
+
+        // legs (manual world transform so they rotate perfectly with the ship)
+        const w = v => this.pos.add(v.rotate(this.angle));
+        drawLine(w(vec2(-.35,-.85)), w(vec2(-.9,-1.55)), .10, rgb(.8,.8,.85));
+        drawLine(w(vec2(.35,-.85)),  w(vec2(.9,-1.55)),  .10, rgb(.8,.8,.85));
+        drawLine(w(vec2(-.9,-1.55)), w(vec2(-.4,-1.55)), .10, rgb(.8,.8,.85));
+        drawLine(w(vec2(.9,-1.55)),  w(vec2(.4,-1.55)),  .10, rgb(.8,.8,.85));
+
+        // flame
+        if (!gameState && this.thrusting)
+        {
+            const flicker = .3 + .25*oscillate(22, 1, time);
+            const flame = [
+                vec2(-.18,-1.02),
+                vec2(.18,-1.02),
+                vec2(0, -1.85 - flicker),
+            ];
+            drawPoly(flame, rgb(1,.7,.15,.9), 0, undefined, this.pos, this.angle);
+            const flame2 = [
+                vec2(-.11,-1.02),
+                vec2(.11,-1.02),
+                vec2(0, -1.55 - flicker*.5),
+            ];
+            drawPoly(flame2, rgb(1,.2,.05,.9), 0, undefined, this.pos, this.angle);
+        }
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////////
+function gameInit()
+{
+    // called once after the engine starts up
+    resetGame();
+}
+
+///////////////////////////////////////////////////////////////////////////////
+function gameUpdate()
+{
+    // restart
+    if (keyWasPressed('KeyR'))
+        resetGame();
+
+    // quick retry after land/crash
+    if (gameState && (keyWasPressed('Space') || keyWasPressed('Enter')))
+        resetGame();
+}
+
+///////////////////////////////////////////////////////////////////////////////
+function gameUpdatePost()
+{
+    // Freeze camera on win/crash (don't zoom back out after you die)
+    if (gameState)
+        return;
+
+    // camera: start zoomed out, then zoom in only when close to the landing pad
+    if (landingPad && player && !player.destroyed)
+    {
+        const d = player.pos.subtract(landingPad.pos).length();
+        const raw = (CAMERA_ZOOM_OUT_DIST - d) / (CAMERA_ZOOM_OUT_DIST - CAMERA_ZOOM_IN_DIST);
+        const z = smoothStep(clamp(raw, 0, 1));
+
+        // when far away, frame both the ship + pad; when close, follow the ship
+        const mid = player.pos.lerp(landingPad.pos, .5);
+        camTarget = mid.lerp(player.pos, z);
+
+        const follow = lerp(.06, .18, z);
+        cameraPos = cameraPos.lerp(camTarget, follow);
+
+        const desiredScale = lerp(CAMERA_SCALE_FAR, CAMERA_SCALE_NEAR, z);
+        camScale = lerp(camScale, desiredScale, .07);
+        cameraScale = camScale;
+    }
+    else
+    {
+        cameraPos = cameraPos.lerp(camTarget, .15);
+        camScale = lerp(camScale, CAMERA_SCALE_FAR, .07);
+        cameraScale = camScale;
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////////
+function gameRender()
+{
+    // background stars
+    for (const s of stars)
+    {
+        // subtle parallax
+        const p = s.pos.add(cameraPos.scale(.12));
+        drawRect(p, vec2(s.s), rgb(1,1,1,s.a));
+    }
+
+    // faint horizon gradient band (simple)
+    const horizonY = landingPad ? (landingPad.pos.y - landingPad.size.y/2) : -6;
+    drawRect(vec2(cameraPos.x, horizonY+25), vec2(WORLD_HALF_WIDTH*3, 50), rgb(.05,.06,.08,.25));
+}
+
+///////////////////////////////////////////////////////////////////////////////
+function gameRenderPost()
+{
+    // HUD
+    const pad = 14;
+    const left = vec2(pad, pad);
+
+    const fuel = player && !player.destroyed ? player.fuel : 0;
+    const vel = player && !player.destroyed ? player.velocity.length() : 0;
+    const ang = player && !player.destroyed ? abs(player.angle) : 0;
+
+    const text =
+        `LUNAR LANDER\n`+
+        `Fuel: ${fuel.toFixed(0)}\n`+
+        `Speed: ${vel.toFixed(3)}\n`+
+        `Tilt: ${(ang*180/PI).toFixed(1)}°\n\n`+
+        `Controls: ←/→ rotate, ↑/W/Space thrust\n`+
+        `R = restart`;
+
+    drawTextScreen(text, left.add(vec2(0, 100)), 22, rgb(1,1,1,.9), 4, rgb(0,0,0,.6), 'left');
+
+    // Fuel bar
+    const barPos = vec2(220, 24);
+    const barSize = vec2(220, 16);
+    const pct = clamp(fuel / MAX_FUEL, 0, 1);
+    drawRect(barPos, barSize.add(vec2(4,4)), rgb(0,0,0,.5), 0, false, true);
+    drawRect(barPos.add(vec2(-(1-pct)*barSize.x/2,0)), vec2(barSize.x*pct, barSize.y), rgb(.25,.9,.35,.9), 0, false, true);
+
+    // Landing helper
+    if (landingPad)
+    {
+        const safeColor = (vel < SAFE_SPEED && ang < SAFE_ANGLE) ? rgb(.2,1,.35,.9) : rgb(1,.35,.2,.9);
+        const msg = `SAFE LIMITS  speed < ${SAFE_SPEED.toFixed(2)}  tilt < ${(SAFE_ANGLE*180/PI).toFixed(0)}°`;
+        drawTextScreen(msg, vec2(mainCanvasSize.x/2, mainCanvasSize.y-30), 22, safeColor, 4, rgb(0,0,0,.6));
+    }
+
+    // End states
+    if (gameState === 1)
+    {
+        drawTextScreen(`LANDED!\nScore: ${score}\n\nPress Space/Enter to retry`,
+            vec2(mainCanvasSize.x/2, mainCanvasSize.y/2), 60, rgb(.2,1,.35,.95), 8, rgb(0,0,0,.7));
+    }
+    else if (gameState === 2)
+    {
+        drawTextScreen(`CRASHED\n\nPress Space/Enter to retry`,
+            vec2(mainCanvasSize.x/2, mainCanvasSize.y/2), 60, rgb(1,.25,.2,.95), 8, rgb(0,0,0,.7));
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////////
+// Startup LittleJS Engine
+engineInit(gameInit, gameUpdate, gameUpdatePost, gameRender, gameRenderPost);
+
+</script>
+<script>(function(){const G='lunarLander';let r=false;setInterval(()=>{if(typeof gameState!=='undefined'&&(gameState===1||gameState===2)&&!r&&typeof score!=='undefined'&&score>0){r=true;try{parent.postMessage({type:'arcade-score',game:G,score:score},'*')}catch(e){}}if(typeof gameState!=='undefined'&&gameState===0)r=false},500)})();</script>

@@ -1,0 +1,603 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Missile Command (LittleJS)</title>
+  <style>
+    html,body{margin:0;height:100%;background:#000;overflow:hidden;font-family:system-ui,Segoe UI,Roboto,Arial;}
+    #wrap{width:100%;height:100%;}
+  </style>
+</head>
+<body>
+<div id="wrap"></div>
+<script src="engine/littlejs.min.js"></script>
+<script>
+'use strict';
+
+// ------------------------------------------------------------
+// Tiny runtime tests (since we don't have a test runner here)
+// ------------------------------------------------------------
+function assert(cond, msg)
+{
+  if (!cond)
+    throw new Error('Test failed: ' + msg);
+}
+
+// ------------------------------------------------------------
+// Sound helper (from the LittleJS starter template)
+// ------------------------------------------------------------
+class SoundGenerator extends Sound {
+  constructor(params = {}) {
+    const {
+      volume = 1,
+      randomness = .05,
+      frequency = 220,
+      attack = 0,
+      release = .1,
+      shapeCurve = 1,
+      slide = 0,
+      pitchJump = 0,
+      pitchJumpTime = 0,
+      repeatTime = 0,
+      noise = 0,
+      bitCrush = 0,
+      delay = 0,
+    } = params;
+    super([volume, randomness, frequency, attack, 0, release, 0, shapeCurve, slide, 0, pitchJump, pitchJumpTime, repeatTime, noise, 0, bitCrush, delay, 1, 0, 0, 0]);
+  }
+}
+
+// ------------------------------------------------------------
+// Missile Command (minimal playable)
+// - Click to fire from nearest base
+// - Explosions destroy incoming missiles
+// - Protect cities; waves ramp up
+// ------------------------------------------------------------
+
+// World layout (world units)
+const levelSize = vec2(40, 22);
+const groundHeight = 2.2;
+const groundY = groundHeight/2;
+
+// Gameplay tuning
+const CITY_COUNT = 6;
+const BASE_COUNT = 3;
+const BASE_AMMO_MAX = 10;
+
+const enemySpeedBase = 4.6;           // units/sec along path
+const playerSpeed = 16;               // units/sec
+const explosionMaxRadius = 2.6;       // world units
+const explosionGrowRate = 7.5;        // units/sec
+const explosionHoldTime = .08;
+const explosionShrinkRate = 5.2;
+
+// State
+let cities = [];
+let bases = [];
+let enemyMissiles = [];
+let playerMissiles = [];
+let explosions = [];
+
+let score = 0;
+let waveIndex = 1;
+let missilesToSpawn = 0;
+let spawnTimer = 0;
+let betweenWaves = false;
+let betweenWavesTimer = 0;
+let gameOver = false;
+
+// Sounds
+let sShoot, sBoom, sEnemyHit, sCityHit, sWave;
+
+function resetWaveState(newWaveIndex)
+{
+  waveIndex = newWaveIndex;
+  missilesToSpawn = 10 + (waveIndex-1)*3;
+  spawnTimer = 1.0;
+  betweenWaves = false;
+  betweenWavesTimer = 0;
+
+  // top-up base ammo a bit each wave
+  for (const b of bases)
+    if (b.alive)
+      b.ammo = Math.min(BASE_AMMO_MAX, b.ammo + 5);
+
+  sWave && sWave.play();
+}
+
+function newGame()
+{
+  enemyMissiles.length = 0;
+  playerMissiles.length = 0;
+  explosions.length = 0;
+
+  score = 0;
+  waveIndex = 1;
+  gameOver = false;
+
+  // place cities
+  cities = [];
+  const cityXs = [6.5, 10.5, 14.5, 25.5, 29.5, 33.5];
+  for (let i=0;i<CITY_COUNT;i++)
+    cities.push({ pos: vec2(cityXs[i], groundHeight + .55), alive: true, hitFlash: 0 });
+
+  // place bases
+  bases = [];
+  const baseXs = [4.2, 20.0, 35.8];
+  for (let i=0;i<BASE_COUNT;i++)
+    bases.push({ pos: vec2(baseXs[i], groundHeight + .45), alive: true, ammo: BASE_AMMO_MAX, flash: 0 });
+
+  resetWaveState(1);
+}
+
+function anyCitiesAlive() { return cities.some(c=>c.alive); }
+function anyBasesAliveWithAmmo() { return bases.some(b=>b.alive && b.ammo>0); }
+
+function pickEnemyTarget()
+{
+  // Mostly cities, sometimes bases
+  const aliveCities = cities.filter(c=>c.alive);
+  const aliveBases = bases.filter(b=>b.alive);
+
+  if (!aliveCities.length && !aliveBases.length)
+    return vec2(levelSize.x/2, groundHeight);
+
+  const targetCityChance = aliveCities.length ? .78 : 0;
+  if (rand() < targetCityChance)
+    return aliveCities[randInt(aliveCities.length)].pos.copy();
+
+  // If no bases alive, fall back to city
+  if (!aliveBases.length)
+    return aliveCities[randInt(aliveCities.length)].pos.copy();
+
+  return aliveBases[randInt(aliveBases.length)].pos.copy();
+}
+
+function spawnEnemyMissile()
+{
+  const start = vec2(rand(0, levelSize.x), levelSize.y + 2.5);
+  const target = pickEnemyTarget();
+  const delta = target.subtract(start);
+  const len = Math.max(.001, delta.length());
+
+  // Slight speed ramp per wave
+  const speed = enemySpeedBase + (waveIndex-1)*.35 + rand(-.2,.2);
+
+  enemyMissiles.push({
+    start,
+    target,
+    pos: start.copy(),
+    t: 0,
+    speed,
+    len,
+    alive: true,
+    w: .07,
+    color: hsl(.08, .8, .7),
+  });
+}
+
+function launchPlayerMissile(target)
+{
+  // choose nearest base with ammo
+  let best = -1;
+  let bestD = 1e9;
+  for (let i=0;i<bases.length;i++)
+  {
+    const b = bases[i];
+    if (!b.alive || b.ammo<=0) continue;
+    const d = Math.abs(b.pos.x - target.x);
+    if (d < bestD) bestD = d, best = i;
+  }
+
+  if (best < 0)
+    return false;
+
+  const b = bases[best];
+  b.ammo--;
+  b.flash = .12;
+
+  const start = b.pos.add(vec2(0, .75));
+  const t = vec2(clamp(target.x, 0, levelSize.x), clamp(target.y, groundHeight+1, levelSize.y+2.5));
+  const delta = t.subtract(start);
+  const len = Math.max(.001, delta.length());
+
+  playerMissiles.push({
+    start,
+    target: t,
+    pos: start.copy(),
+    t: 0,
+    speed: playerSpeed,
+    len,
+    alive: true,
+    w: .1,
+    color: hsl(.55, .9, .72),
+  });
+
+  sShoot && sShoot.play();
+  return true;
+}
+
+function addExplosion(pos, friendly)
+{
+  explosions.push({
+    pos: pos.copy(),
+    r: 0,
+    rMax: explosionMaxRadius * (friendly ? 1 : .7),
+    friendly,
+    state: 0, // 0 grow, 1 hold, 2 shrink
+    hold: 0,
+  });
+
+  (friendly ? sBoom : sCityHit) && (friendly ? sBoom : sCityHit).play();
+}
+
+function updateMissile(m)
+{
+  if (!m.alive) return;
+  m.t += (m.speed * timeDelta) / m.len;
+  const p = clamp(m.t, 0, 1);
+  m.pos = m.start.add(m.target.subtract(m.start).scale(p));
+
+  if (m.t >= 1)
+  {
+    m.alive = false;
+    return true;
+  }
+  return false;
+}
+
+function resolveEnemyImpact(pos)
+{
+  // hit city or base if close
+  for (const c of cities)
+  {
+    if (c.alive && c.pos.distance(pos) < 1.0)
+    {
+      c.alive = false;
+      c.hitFlash = .35;
+      addExplosion(c.pos, false);
+      return;
+    }
+  }
+
+  for (const b of bases)
+  {
+    if (b.alive && b.pos.distance(pos) < 1.0)
+    {
+      b.alive = false;
+      b.ammo = 0;
+      b.flash = .35;
+      addExplosion(b.pos, false);
+      return;
+    }
+  }
+
+  // default small ground pop
+  addExplosion(pos, false);
+}
+
+function updateExplosions()
+{
+  for (const e of explosions)
+  {
+    if (e.state === 0)
+    {
+      e.r += explosionGrowRate * timeDelta;
+      if (e.r >= e.rMax)
+      {
+        e.r = e.rMax;
+        e.state = 1;
+        e.hold = explosionHoldTime;
+      }
+    }
+    else if (e.state === 1)
+    {
+      e.hold -= timeDelta;
+      if (e.hold <= 0)
+        e.state = 2;
+    }
+    else
+    {
+      e.r -= explosionShrinkRate * timeDelta;
+      if (e.r <= 0)
+        e.r = 0;
+    }
+  }
+
+  explosions = explosions.filter(e=>e.r>0);
+}
+
+function checkExplosionHits()
+{
+  // friendly explosions destroy enemy missiles
+  for (const e of explosions)
+  {
+    if (!e.friendly || e.r <= 0) continue;
+
+    for (const m of enemyMissiles)
+    {
+      if (!m.alive) continue;
+      if (m.pos.distance(e.pos) <= e.r)
+      {
+        m.alive = false;
+        score += 25 + (waveIndex-1)*2;
+        sEnemyHit && sEnemyHit.play();
+      }
+    }
+  }
+}
+
+function checkWaveComplete()
+{
+  if (betweenWaves || gameOver) return;
+  const enemiesAlive = enemyMissiles.some(m=>m.alive);
+  const playersAlive = playerMissiles.some(m=>m.alive);
+
+  if (missilesToSpawn <= 0 && !enemiesAlive && !playersAlive)
+  {
+    betweenWaves = true;
+    betweenWavesTimer = 1.2;
+
+    // bonus for surviving cities + ammo
+    const cityBonus = cities.filter(c=>c.alive).length * 100;
+    const ammoBonus = bases.reduce((a,b)=>a+(b.ammo|0),0) * 5;
+    score += cityBonus + ammoBonus;
+  }
+}
+
+// ------------------------------------------------------------
+// LittleJS callbacks
+// ------------------------------------------------------------
+
+function gameInit()
+{
+  // fixed resolution, classic feel
+  setCanvasFixedSize(vec2(1280, 720));
+  setCameraPos(levelSize.scale(.5));
+  setCameraScale(32);
+
+  // a little less loud
+  soundVolume = .28;
+
+  // make some bleeps
+  sShoot    = new SoundGenerator({volume:.7, frequency:520, attack:0, release:.08, shapeCurve:1.4, slide:-.25, randomness:.02});
+  sBoom     = new SoundGenerator({volume:1,  frequency:140, attack:0, release:.22, shapeCurve:.7, noise:.25, randomness:.12});
+  sEnemyHit = new SoundGenerator({volume:.65, frequency:260, attack:0, release:.1,  shapeCurve:1.1, noise:.08, randomness:.08, pitchJump:120, pitchJumpTime:.02});
+  sCityHit  = new SoundGenerator({volume:1,  frequency:80,  attack:0, release:.35, shapeCurve:.6, noise:.35, randomness:.15, slide:-.05});
+  sWave     = new SoundGenerator({volume:.5, frequency:420, attack:0, release:.18, shapeCurve:1.2, pitchJump:180, pitchJumpTime:.04});
+
+  newGame();
+}
+
+function gameUpdate()
+{
+  // restart
+  if (keyWasPressed('KeyR'))
+    return newGame();
+
+  // click to launch (also restart on click after game over)
+  if (mouseWasPressed(0))
+  {
+    if (gameOver)
+      return newGame();
+
+    // allow firing even while between waves
+    launchPlayerMissile(mousePos);
+  }
+
+  // base flashes
+  for (const b of bases)
+    b.flash = Math.max(0, b.flash - timeDelta);
+  for (const c of cities)
+    c.hitFlash = Math.max(0, c.hitFlash - timeDelta);
+
+  if (gameOver)
+    return;
+
+  // spawn enemies
+  if (!betweenWaves)
+  {
+    spawnTimer -= timeDelta;
+    if (spawnTimer <= 0 && missilesToSpawn > 0)
+    {
+      spawnEnemyMissile();
+      missilesToSpawn--;
+
+      // tempo: faster later waves
+      const base = Math.max(.25, .85 - (waveIndex-1)*.05);
+      spawnTimer = base + rand(-.12, .18);
+    }
+  }
+
+  // update missiles
+  for (const m of enemyMissiles)
+  {
+    const impacted = updateMissile(m);
+    if (impacted)
+      resolveEnemyImpact(m.target);
+  }
+
+  for (const m of playerMissiles)
+  {
+    const impacted = updateMissile(m);
+    if (impacted)
+      addExplosion(m.target, true);
+  }
+
+  enemyMissiles = enemyMissiles.filter(m=>m.alive);
+  playerMissiles = playerMissiles.filter(m=>m.alive);
+
+  // explosions and hits
+  updateExplosions();
+  checkExplosionHits();
+
+  // wave logic
+  checkWaveComplete();
+  if (betweenWaves)
+  {
+    betweenWavesTimer -= timeDelta;
+    if (betweenWavesTimer <= 0)
+      resetWaveState(waveIndex+1);
+  }
+
+  // game over
+  if (!anyCitiesAlive())
+    gameOver = true;
+}
+
+function gameUpdatePost()
+{
+  // keep camera fixed
+  setCameraPos(levelSize.scale(.5));
+}
+
+function drawGround()
+{
+  // sky
+  drawRect(levelSize.scale(.5).add(vec2(0, 4)), vec2(levelSize.x, levelSize.y+10), hsl(.62, .55, .10));
+
+  // subtle stars
+  for (let i=0;i<40;i++)
+  {
+    const x = (i*97 % 400) / 10;
+    const y = (i*53 % 180) / 10 + 8;
+    const tw = .12 + oscillate(.6 + i*.03, .06);
+    drawCircle(vec2(x, y), tw, hsl(.58, .2, .7, .55));
+  }
+
+  // ground
+  drawRect(vec2(levelSize.x/2, groundY), vec2(levelSize.x, groundHeight), hsl(.12, .65, .12));
+
+  // horizon line
+  drawLine(vec2(0, groundHeight), vec2(levelSize.x, groundHeight), .08, hsl(.11, .8, .2));
+}
+
+function drawInstallations()
+{
+  // cities
+  const citySize = vec2(1.4, .9);
+  for (const c of cities)
+  {
+    const col = c.alive ? hsl(.12, .15, .72) : hsl(.0, 0, .18);
+    drawRect(c.pos, citySize, col);
+    drawRect(c.pos.add(vec2(0,.35)), vec2(.5,.35), c.alive ? hsl(.12,.18,.82) : hsl(.0,0,.12));
+
+    if (c.hitFlash>0)
+      drawRect(c.pos, citySize.scale(1.3), hsl(.06,1,.65, clamp(c.hitFlash*2,0,1)));
+
+    // smoke for destroyed cities
+    if (!c.alive)
+    {
+      const t = time + c.pos.x*.3;
+      for (let i=0;i<2;i++)
+      {
+        const p = c.pos.add(vec2((i?-.35:.3), .6 + i*.2 + oscillate(1.2+i, .2, t)));
+        drawCircle(p, .45, hsl(0,0,.35,.35));
+      }
+    }
+  }
+
+  // bases
+  for (let i=0;i<bases.length;i++)
+  {
+    const b = bases[i];
+    const baseSize = vec2(1.7, .8);
+    const aliveCol = hsl(.5, .25, .65);
+    const deadCol  = hsl(0, 0, .18);
+    drawRect(b.pos, baseSize, b.alive ? aliveCol : deadCol);
+
+    // little launcher turret
+    const turretTop = b.pos.add(vec2(0, .55));
+    drawCircle(turretTop, .25, b.alive ? hsl(.52,.3,.75) : deadCol);
+
+    // ammo text
+    if (b.alive)
+      drawText(b.ammo, b.pos.add(vec2(0, 1.2)), .6, hsl(.18,.1,.95), .12, hsl(0,0,0,.7));
+
+    if (b.flash>0)
+      drawRect(b.pos, baseSize.scale(1.4), hsl(.55,1,.7, clamp(b.flash*3,0,1)));
+  }
+}
+
+function drawMissiles()
+{
+  // enemy missiles
+  for (const m of enemyMissiles)
+  {
+    drawLine(m.start, m.pos, m.w, hsl(.05, .85, .7));
+    drawCircle(m.pos, .22, hsl(.05, .9, .75));
+  }
+
+  // player missiles
+  for (const m of playerMissiles)
+  {
+    drawLine(m.start, m.pos, m.w, hsl(.55, .95, .72));
+    drawCircle(m.pos, .18, hsl(.55, .95, .8));
+  }
+}
+
+function drawExplosions()
+{
+  for (const e of explosions)
+  {
+    const a = e.friendly ? .55 : .35;
+    const col = e.friendly ? hsl(.55, .85, .72, a) : hsl(.06, 1, .6, a);
+    const edge = e.friendly ? hsl(.55, .9, .85, .8) : hsl(.06, 1, .75, .8);
+
+    // filled core
+    drawCircle(e.pos, e.r*2, col);
+    // bright ring
+    drawCircle(e.pos, e.r*2, edge, .12, edge);
+  }
+}
+
+function drawCrosshair()
+{
+  const p = vec2(clamp(mousePos.x, 0, levelSize.x), clamp(mousePos.y, groundHeight, levelSize.y+2.5));
+  const s = .55;
+  drawLine(p.add(vec2(-s,0)), p.add(vec2(s,0)), .06, hsl(.55,.2,.95,.7));
+  drawLine(p.add(vec2(0,-s)), p.add(vec2(0,s)), .06, hsl(.55,.2,.95,.7));
+}
+
+function gameRender()
+{
+  drawGround();
+  drawInstallations();
+  drawMissiles();
+  drawExplosions();
+  drawCrosshair();
+}
+
+function gameRenderPost()
+{
+  const pad = 14;
+  const topLeft = vec2(pad, pad+14);
+
+  drawTextScreen(`SCORE ${score}`, topLeft, 28, hsl(.12,.1,.95), 4, hsl(0,0,0,.6), 'left');
+  drawTextScreen(`WAVE ${waveIndex}`, topLeft.add(vec2(0, 34)), 22, hsl(.12,.08,.9), 3, hsl(0,0,0,.6), 'left');
+
+  // ammo hint
+  if (!gameOver && !anyBasesAliveWithAmmo())
+    drawTextScreen('NO AMMO! (protect what\'s left)', vec2(mainCanvasSize.x/2, 30), 22, hsl(.06,1,.65), 4, hsl(0,0,0,.7));
+
+  if (betweenWaves && !gameOver)
+    drawTextScreen('WAVE CLEARED!', vec2(mainCanvasSize.x/2, 70), 42, hsl(.16,.15,.95), 6, hsl(0,0,0,.7));
+
+  if (gameOver)
+  {
+    drawTextScreen('GAME OVER', vec2(mainCanvasSize.x/2, mainCanvasSize.y/2-20), 80, hsl(.06,1,.65), 10, hsl(0,0,0,.75));
+    drawTextScreen('Click or press R to restart', vec2(mainCanvasSize.x/2, mainCanvasSize.y/2+55), 28, hsl(.12,.05,.95), 5, hsl(0,0,0,.7));
+  }
+  else
+  {
+    drawTextScreen('Click to fire · R to restart', vec2(mainCanvasSize.x - pad, pad+14), 18, hsl(.12,.05,.9), 3, hsl(0,0,0,.6), 'right');
+  }
+}
+
+// Startup
+engineInit(gameInit, gameUpdate, gameUpdatePost, gameRender, gameRenderPost, [], document.getElementById('wrap'));
+</script>
+<script>(function(){const G='missileCommand';let r=false;setInterval(()=>{if(typeof gameOver!=='undefined'&&gameOver&&!r&&score>0){r=true;try{parent.postMessage({type:'arcade-score',game:G,score:score},'*')}catch(e){}}if(typeof gameOver!=='undefined'&&!gameOver)r=false},500)})();</script>
+</body>
+</html>

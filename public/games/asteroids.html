@@ -1,0 +1,673 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>LittleJS — Asteroids</title>
+  <style>
+    /* Keep the page clean and let LittleJS manage the canvas */
+    html, body { margin: 0; padding: 0; background: #000; overflow: hidden; }
+  </style>
+</head>
+<body>
+<script src="engine/littlejs.min.js"></script>
+<script>
+'use strict';
+
+// ============================================================
+// Sound (no external assets)
+// ============================================================
+// AI can use this class to generate sounds (from the provided template)
+class SoundGenerator extends Sound 
+{
+    constructor(params = {})
+    {
+        const {
+            volume = 1,        // Volume scale (percent)
+            randomness = .05,  // How much to randomize frequency (percent Hz)
+            frequency = 220,   // Frequency of sound (Hz)
+            attack = 0,        // Attack time, how fast sound starts (seconds)
+            release = .1,      // Release time, how fast sound fades out (seconds)
+            shapeCurve = 1,    // Squareness of wave (0=square, 1=normal, 2=pointy)
+            slide = 0,         // How much to slide frequency (kHz/s)
+            pitchJump = 0,     // Frequency of pitch jump (Hz)
+            pitchJumpTime = 0, // Time of pitch jump (seconds)
+            repeatTime = 0,    // Resets some parameters periodically (seconds)
+            noise = 0,         // How much random noise to add (percent)
+            bitCrush = 0,      // Resamples at a lower frequency in (samples*100)
+            delay = 0,         // Overlap sound with itself for reverb and flanger effects (seconds)
+        } = params;
+        
+        super([volume, randomness, frequency, attack, 0, release, 0, shapeCurve, slide, 0, pitchJump, pitchJumpTime, repeatTime, noise, 0, bitCrush, delay, 1, 0, 0, 0]);
+    }
+}
+
+const sShoot  = new SoundGenerator({volume:.6, frequency:820, release:.06, slide:-1.6, shapeCurve:.6, noise:.02});
+const sBoom   = new SoundGenerator({volume:1,  frequency:90,  release:.35, slide:-.7,  shapeCurve:1.2, noise:.12, delay:.02});
+const sHit    = new SoundGenerator({volume:.8, frequency:220, release:.18, slide:-.4,  shapeCurve:1.1, noise:.08});
+const sThrust = new SoundGenerator({volume:.35, frequency:120, release:.12, slide:.2,  shapeCurve:.2, noise:.18});
+const sZap    = new SoundGenerator({volume:.6, frequency:520, release:.12, slide:1.4,  shapeCurve:.8, noise:.05});
+
+// ============================================================
+// Game constants
+// ============================================================
+const FIXED_RES = vec2(960, 540);
+const CAMERA_SCALE = 28;          // pixels per world unit
+const WRAP_MARGIN = 1.5;          // extra margin so objects wrap smoothly
+
+const SHIP_RADIUS = 0.275; // half size
+const SHIP_TURN_SPEED = 0.045;    // radians/frame
+const SHIP_THRUST = 0.009;        // accel/frame (slower)
+const SHIP_MAX_SPEED = 0.12;      // slower top speed
+const SHIP_DAMPING = 0.975;       // stronger damping to keep drift manageable
+
+const BULLET_SPEED = 0.22;        // slower bullets
+const BULLET_LIFE = 1.6;          // seconds (longer since bullets are slower)
+const BULLET_COOLDOWN = 0.12;     // seconds
+const BULLET_MAX = 5;
+
+const ROCK_RADII = [0, 1.25, 2.05, 3.2]; // index = sizeTier (1..3)
+
+// ============================================================
+// Globals
+// ============================================================
+let worldSize = vec2(30, 18);
+let worldHalf = vec2(15, 9);
+
+let ship;
+let bullets = [];
+let rocks = [];
+let debris = [];
+
+let score = 0;
+let lives = 3;
+let level = 1;
+let gameOver = false;
+
+let respawnTimer = new Timer();
+let invulnTimer = new Timer();
+let shootTimer = new Timer();
+let thrustSoundTimer = new Timer();
+let hyperTimer = new Timer();
+
+// simple star field
+let stars = [];
+
+// ============================================================
+// Helpers
+// ============================================================
+const TAU = Math.PI * 2;
+const clamp01 = (v)=> clamp(v, 0, 1);
+
+function angleToVec(a) { return vec2(Math.sin(a), Math.cos(a)); } // up is 0 in LittleJS style
+
+function wrapPos(p)
+{
+    // wrap around the camera bounds (centered at cameraPos)
+    const left   = cameraPos.x - worldHalf.x - WRAP_MARGIN;
+    const right  = cameraPos.x + worldHalf.x + WRAP_MARGIN;
+    const bottom = cameraPos.y - worldHalf.y - WRAP_MARGIN;
+    const top    = cameraPos.y + worldHalf.y + WRAP_MARGIN;
+
+    if (p.x < left)  p.x = right;
+    if (p.x > right) p.x = left;
+    if (p.y < bottom)p.y = top;
+    if (p.y > top)   p.y = bottom;
+
+    return p;
+}
+
+function dist2(a,b)
+{
+    const dx = a.x - b.x, dy = a.y - b.y;
+    return dx*dx + dy*dy;
+}
+
+function circlesHit(posA, rA, posB, rB)
+{
+    const rr = rA + rB;
+    return dist2(posA, posB) <= rr*rr;
+}
+
+function randEdgeSpawn(minDistanceFromCenter = 4)
+{
+    // spawn just outside the view bounds
+    const side = randInt(4);
+    const x = rand(worldHalf.x, -worldHalf.x);
+    const y = rand(worldHalf.y, -worldHalf.y);
+
+    let p;
+    if (side === 0) p = vec2(cameraPos.x - worldHalf.x - 2, cameraPos.y + y);
+    if (side === 1) p = vec2(cameraPos.x + worldHalf.x + 2, cameraPos.y + y);
+    if (side === 2) p = vec2(cameraPos.x + x, cameraPos.y - worldHalf.y - 2);
+    if (side === 3) p = vec2(cameraPos.x + x, cameraPos.y + worldHalf.y + 2);
+
+    // ensure not too close to the ship spawn area
+    if (p.distance(cameraPos) < minDistanceFromCenter)
+        p = p.subtract(p.subtract(cameraPos).normalize(minDistanceFromCenter));
+
+    return p;
+}
+
+function resetGame()
+{
+    // destroy everything
+    engineObjectsDestroy(true);
+    bullets = [];
+    rocks = [];
+    debris = [];
+
+    score = 0;
+    lives = 3;
+    level = 1;
+    gameOver = false;
+
+    spawnShip(true);
+    spawnWave(level);
+}
+
+function spawnShip(centered=false)
+{
+    const pos = centered ? cameraPos.copy() : vec2(cameraPos.x, cameraPos.y - worldHalf.y*.35);
+    ship = new Ship(pos);
+    respawnTimer.set(0);
+    invulnTimer.set(2.0);
+}
+
+function spawnWave(wave)
+{
+    const count = 3 + wave;
+    for (let i=0;i<count;i++)
+    {
+        const p = randEdgeSpawn(5);
+        const a = rand(TAU);
+        // 3x slower asteroids
+        const v = angleToVec(a).scale(rand(.023, .01) + wave*.002);
+        new Rock(p, 3, v);
+    }
+}
+
+function addScore(points)
+{
+    score += points;
+}
+
+function explodeAt(pos, intensity=1)
+{
+    const pieces = Math.floor(10 + 18*intensity);
+    for (let i=0;i<pieces;i++)
+    {
+        const a = rand(TAU);
+        const sp = rand(.22, .03) * (1 + intensity);
+        new Debris(pos.copy(), angleToVec(a).scale(sp), rand(TAU), rand(.9, .35));
+    }
+}
+
+// ============================================================
+// Objects
+// ============================================================
+class Ship extends EngineObject
+{
+    constructor(pos)
+    {
+        super(pos, vec2(SHIP_RADIUS*2));
+        this.mass = 1;
+        this.damping = 1;       // we handle damping manually for a more asteroids-like feel
+        this.angleDamping = 1;
+        this.setCollision(false, false, false, false);
+
+        this.angle = 0;
+        this.velocity = vec2();
+        this.dead = false;
+    }
+
+    update()
+    {
+        if (gameOver) return;
+        if (this.dead) return;
+
+        // rotation
+        const left  = keyIsDown('ArrowLeft') || keyIsDown('KeyA');
+        const right = keyIsDown('ArrowRight') || keyIsDown('KeyD');
+        if (left)  this.angle -= SHIP_TURN_SPEED;
+        if (right) this.angle += SHIP_TURN_SPEED;
+
+        // thrust
+        const thrust = keyIsDown('ArrowUp') || keyIsDown('KeyW');
+        if (thrust)
+        {
+            const dir = angleToVec(this.angle);
+            this.velocity = this.velocity.add(dir.scale(SHIP_THRUST));
+
+            // little exhaust particles
+            if (randBool(.35))
+            {
+                const back = this.pos.subtract(dir.scale(SHIP_RADIUS*1.3));
+                const pv = dir.scale(-rand(.09,.03)).add(randVec2(rand(.02,.0)));
+                new Debris(back, pv, rand(TAU), rand(.25,.12), true);
+            }
+
+            // occasional thrust sound
+            if (!thrustSoundTimer.isSet() || thrustSoundTimer.elapsed())
+            {
+                sThrust.play(this.pos, .45);
+                thrustSoundTimer.set(.11);
+            }
+        }
+
+        // manual damping + max speed
+        this.velocity = this.velocity.scale(SHIP_DAMPING);
+        const sp2 = this.velocity.lengthSquared();
+        if (sp2 > SHIP_MAX_SPEED*SHIP_MAX_SPEED)
+            this.velocity = this.velocity.normalize(SHIP_MAX_SPEED);
+
+        // hyperspace
+        if ((!hyperTimer.isSet() || hyperTimer.elapsed()) && (keyWasPressed('ShiftLeft') || keyWasPressed('KeyX')))
+        {
+            sZap.play(this.pos, .6);
+            this.pos = vec2(
+                rand(cameraPos.x + worldHalf.x - 2, cameraPos.x - worldHalf.x + 2),
+                rand(cameraPos.y + worldHalf.y - 2, cameraPos.y - worldHalf.y + 2)
+            );
+            this.velocity = randVec2(rand(.16, .04));
+            hyperTimer.set(1.2);
+            invulnTimer.set(1.2);
+            explodeAt(this.pos, .25);
+        }
+
+        // shooting
+        if (!shootTimer.isSet() || shootTimer.elapsed())
+        {
+            if (keyWasPressed('Space') || keyWasPressed('KeyZ'))
+            {
+                if (bullets.length < BULLET_MAX)
+                {
+                    shootTimer.set(BULLET_COOLDOWN);
+                    this.fire();
+                }
+            }
+        }
+
+        // move
+        this.pos = this.pos.add(this.velocity);
+        wrapPos(this.pos);
+    }
+
+    fire()
+    {
+        const dir = angleToVec(this.angle);
+        const p = this.pos.add(dir.scale(SHIP_RADIUS*1.55));
+        // bullets inherit only a little ship velocity so they don't feel "too fast" while drifting
+        const v = this.velocity.scale(.25).add(dir.scale(BULLET_SPEED));
+        new Bullet(p, v);
+        sShoot.play(p, .55);
+    }
+
+    kill()
+    {
+        if (this.dead) return;
+        this.dead = true;
+
+        sBoom.play(this.pos, 1);
+        explodeAt(this.pos, 1.15);
+        this.destroy();
+
+        lives--;
+        if (lives < 0)
+        {
+            gameOver = true;
+            return;
+        }
+
+        respawnTimer.set(1.35);
+    }
+
+    render()
+    {
+        if (this.dead) return;
+
+        // blink when invulnerable
+        if (invulnTimer.isSet() && invulnTimer.active() && (time*10|0)%2)
+            return;
+
+        const col = rgb(1,1,1);
+        const dir = angleToVec(this.angle);
+        const right = angleToVec(this.angle - Math.PI/2);
+
+        // triangle points
+        const nose = this.pos.add(dir.scale(SHIP_RADIUS*1.45));
+        const l = this.pos.subtract(dir.scale(SHIP_RADIUS*1.0)).add(right.scale(SHIP_RADIUS*0.95));
+        const r = this.pos.subtract(dir.scale(SHIP_RADIUS*1.0)).subtract(right.scale(SHIP_RADIUS*0.95));
+
+        drawLine(nose, l, .08, col);
+        drawLine(l, r, .08, col);
+        drawLine(r, nose, .08, col);
+
+        // tiny cockpit line
+        drawLine(this.pos.add(dir.scale(SHIP_RADIUS*.35)), this.pos.subtract(dir.scale(SHIP_RADIUS*.25)), .06, col);
+    }
+}
+
+class Bullet extends EngineObject
+{
+    constructor(pos, vel)
+    {
+        super(pos, vec2(.18));
+        this.mass = 0; // no solver
+        this.setCollision(false, false, false, false);
+        this.velocity = vel;
+        this.life = new Timer(BULLET_LIFE);
+
+        bullets.push(this);
+    }
+
+    update()
+    {
+        this.pos = this.pos.add(this.velocity);
+        wrapPos(this.pos);
+
+        if (this.life.elapsed())
+            this.destroy();
+    }
+
+    destroy(immediate=true)
+    {
+        super.destroy(immediate);
+        bullets = bullets.filter(b=> b !== this && !b.destroyed);
+    }
+
+    render()
+    {
+        drawCircle(this.pos, .12, rgb(1,1,1));
+    }
+}
+
+class Rock extends EngineObject
+{
+    constructor(pos, sizeTier=3, vel=vec2())
+    {
+        const r = ROCK_RADII[sizeTier];
+        super(pos, vec2(r*2));
+
+        this.mass = 0;
+        this.setCollision(false, false, false, false);
+
+        this.tier = sizeTier;
+        this.r = r;
+        this.velocity = vel.lengthSquared() ? vel : randVec2(rand(.033, .013));
+        this.angle = rand(TAU);
+        this.angleVelocity = rand(.004, -.004);
+
+        // build a jaggy outline (local points)
+        const verts = 11;
+        this.points = [];
+        for (let i=0;i<verts;i++)
+        {
+            const a = (i/verts)*TAU;
+            const rr = r * rand(1.05, .65);
+            this.points.push(vec2(Math.sin(a)*rr, Math.cos(a)*rr));
+        }
+
+        rocks.push(this);
+    }
+
+    update()
+    {
+        this.pos = this.pos.add(this.velocity);
+        this.angle += this.angleVelocity;
+        wrapPos(this.pos);
+    }
+
+    split(fromVel)
+    {
+        const tier = this.tier;
+        if (tier <= 1) return;
+
+        const newTier = tier - 1;
+        const baseSpeed = rand(.047, .023) + (3-newTier)*.007;
+
+        for (let i=0;i<2;i++)
+        {
+            const a = rand(TAU);
+            const v = angleToVec(a).scale(baseSpeed).add(fromVel.scale(.25));
+            const p = this.pos.add(randVec2(.35));
+            new Rock(p, newTier, v);
+        }
+    }
+
+    destroy(immediate=true)
+    {
+        super.destroy(immediate);
+        rocks = rocks.filter(r=> r !== this && !r.destroyed);
+    }
+
+    render()
+    {
+        const col = rgb(1,1,1);
+
+        // draw outline by connecting rotated points
+        let prev;
+        for (let i=0;i<this.points.length;i++)
+        {
+            const pLocal = this.points[i].rotate(this.angle);
+            const p = this.pos.add(pLocal);
+            if (i)
+                drawLine(prev, p, .08, col);
+            prev = p;
+        }
+        // close
+        if (this.points.length)
+        {
+            const first = this.pos.add(this.points[0].rotate(this.angle));
+            drawLine(prev, first, .08, col);
+        }
+    }
+}
+
+class Debris extends EngineObject
+{
+    constructor(pos, vel, angle, lifeSeconds=.5, small=false)
+    {
+        super(pos, vec2());
+        this.mass = 0;
+        this.setCollision(false, false, false, false);
+
+        this.velocity = vel;
+        this.angle = angle;
+        this.spin = rand(.25, -.25);
+        this.life = new Timer(lifeSeconds);
+        this.length = small ? rand(.18, .08) : rand(.55, .18);
+
+        debris.push(this);
+    }
+
+    update()
+    {
+        this.pos = this.pos.add(this.velocity);
+        this.velocity = this.velocity.scale(.985);
+        this.angle += this.spin;
+        wrapPos(this.pos);
+
+        if (this.life.elapsed())
+            this.destroy();
+    }
+
+    destroy(immediate=true)
+    {
+        super.destroy(immediate);
+        debris = debris.filter(d=> d !== this && !d.destroyed);
+    }
+
+    render()
+    {
+        const t = this.life.getPercent();
+        const a = 1 - clamp01(t);
+        const col = rgb(1,1,1,a);
+        const dir = angleToVec(this.angle);
+        const aPos = this.pos.subtract(dir.scale(this.length*.5));
+        const bPos = this.pos.add(dir.scale(this.length*.5));
+        drawLine(aPos, bPos, .06, col);
+    }
+}
+
+// ============================================================
+// Core callbacks
+// ============================================================
+function gameInit()
+{
+    setShowSplashScreen(false);
+    setCanvasFixedSize(FIXED_RES);
+    setCameraScale(CAMERA_SCALE);
+    setCameraPos(vec2());
+
+    // We do our own collisions; keep the physics solver off for speed/simplicity
+    setEnablePhysicsSolver(false);
+    setGravity(vec2());
+
+    // stars
+    stars = [];
+    const starCount = 110;
+    for (let i=0;i<starCount;i++)
+    {
+        // place in a slightly larger range so the edges don't feel empty
+        const p = vec2(rand(20, -20), rand(12, -12));
+        const s = rand(.09, .03);
+        stars.push({p, s, tw: rand(3, 1)});
+    }
+
+    resetGame();
+}
+
+function gameUpdate()
+{
+    // restart
+    if (gameOver && keyWasPressed('Enter'))
+        resetGame();
+
+    // update timers
+    // (LittleJS timers tick automatically; we just read them)
+
+    // respawn
+    if (!gameOver && respawnTimer.isSet() && respawnTimer.elapsed() && !ship)
+        spawnShip(false);
+
+    // collisions
+    handleCollisions();
+
+    // next wave
+    if (!gameOver && rocks.length === 0)
+    {
+        level++;
+        spawnWave(level);
+        invulnTimer.set(1.2);
+    }
+}
+
+function handleCollisions()
+{
+    if (gameOver) return;
+
+    // bullets vs rocks
+    for (const b of bullets)
+    {
+        if (b.destroyed) continue;
+        for (const r of rocks)
+        {
+            if (r.destroyed) continue;
+            if (circlesHit(b.pos, .12, r.pos, r.r))
+            {
+                b.destroy();
+
+                sHit.play(r.pos, .85);
+                explodeAt(r.pos, r.tier/3);
+
+                addScore(20 * r.tier);
+                const prevVel = r.velocity.copy();
+                r.split(prevVel);
+                r.destroy();
+                break;
+            }
+        }
+    }
+
+    // ship vs rocks
+    if (ship && !ship.destroyed)
+    {
+        const invuln = invulnTimer.isSet() && invulnTimer.active();
+        if (!invuln)
+        {
+            for (const r of rocks)
+            {
+                if (r.destroyed) continue;
+                if (circlesHit(ship.pos, SHIP_RADIUS, r.pos, r.r*.92))
+                {
+                    ship.kill();
+                    ship = undefined;
+                    break;
+                }
+            }
+        }
+    }
+}
+
+function gameUpdatePost()
+{
+    // keep camera centered
+    setCameraPos(vec2());
+
+    // cache world bounds
+    worldSize = getCameraSize();
+    worldHalf = worldSize.scale(.5);
+}
+
+function gameRender()
+{
+    // background: subtle vignette
+    drawRect(cameraPos, worldSize.scale(1.2), rgb(.02,.02,.03), 0);
+
+    // stars
+    for (const s of stars)
+    {
+        const twinkle = .55 + .45*Math.sin((time*s.tw) + s.p.x*1.7);
+        drawCircle(s.p, s.s*twinkle, rgb(1,1,1, .65*twinkle));
+    }
+
+    // faint border
+    const w = worldHalf.x, h = worldHalf.y;
+    const col = rgb(1,1,1,.08);
+    drawLine(vec2(-w,-h), vec2(w,-h), .05, col);
+    drawLine(vec2(w,-h), vec2(w,h), .05, col);
+    drawLine(vec2(w,h), vec2(-w,h), .05, col);
+    drawLine(vec2(-w,h), vec2(-w,-h), .05, col);
+}
+
+function gameRenderPost()
+{
+    // HUD
+    const hud = `SCORE  ${score}\nLIVES  ${Math.max(0,lives)}   LEVEL  ${level}`;
+    drawTextScreen(hud, vec2(20, 36), 24, rgb(1,1,1), 3, rgb(0,0,0), 'left', 'monospace');
+
+    const controls = `\u2190/\u2192 rotate   \u2191 thrust   SPACE/Z shoot   SHIFT/X hyperspace   ENTER restart`;
+    drawTextScreen(controls, vec2(mainCanvasSize.x/2, mainCanvasSize.y - 22), 18, rgb(1,1,1,.85), 3, rgb(0,0,0,.7), 'center', 'monospace');
+
+    // game over
+    if (gameOver)
+    {
+        drawTextScreen('GAME OVER', vec2(mainCanvasSize.x/2, mainCanvasSize.y/2 - 30), 70, rgb(1,1,1), 6, rgb(0,0,0), 'center', 'monospace');
+        drawTextScreen('Press ENTER to restart', vec2(mainCanvasSize.x/2, mainCanvasSize.y/2 + 26), 26, rgb(1,1,1,.9), 4, rgb(0,0,0), 'center', 'monospace');
+    }
+    else if (!ship && respawnTimer.isSet() && respawnTimer.active())
+    {
+        drawTextScreen('Get Ready...', vec2(mainCanvasSize.x/2, mainCanvasSize.y/2 + 10), 30, rgb(1,1,1,.9), 4, rgb(0,0,0), 'center', 'monospace');
+    }
+}
+
+// ============================================================
+// Startup
+// ============================================================
+engineInit(gameInit, gameUpdate, gameUpdatePost, gameRender, gameRenderPost);
+
+</script>
+<script>(function(){const G='asteroids';let r=false;setInterval(()=>{if(typeof gameOver!=='undefined'&&gameOver&&!r&&score>0){r=true;try{parent.postMessage({type:'arcade-score',game:G,score:score},'*')}catch(e){}}if(typeof gameOver!=='undefined'&&!gameOver)r=false},500)})();</script>
+</body>
+</html>

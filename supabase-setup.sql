@@ -42,3 +42,15 @@ ALTER TABLE chat_messages ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY "Allow all for anon" ON leaderboard FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Allow all for anon" ON chat_messages FOR ALL USING (true) WITH CHECK (true);
+
+-- Arcade high scores (one best score per user per game)
+CREATE TABLE IF NOT EXISTS arcade_scores (
+  username TEXT NOT NULL,
+  game TEXT NOT NULL,
+  score INT DEFAULT 0,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  PRIMARY KEY (username, game)
+);
+
+ALTER TABLE arcade_scores ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Allow all for anon" ON arcade_scores FOR ALL USING (true) WITH CHECK (true);

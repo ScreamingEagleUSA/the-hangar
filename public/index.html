@@ -78,6 +78,8 @@
           <button class="room-join-btn" id="reactionBtn">Play</button>
         </div>
       </div>
+      <h2 class="section-title" style="margin-top:20px">Arcade</h2>
+      <div id="arcadeGrid" class="rooms-grid"></div>
     </section>
     <section class="chat-section" id="lobbyChatSection">
       <div class="chat-header">
@@ -131,10 +133,14 @@
 <!-- ── LEADERBOARD MODAL ───────────────────────────────────── -->
 <div id="leaderboardModal" class="modal">
   <div class="modal-backdrop"></div>
-  <div class="modal-content">
+  <div class="modal-content modal-lg">
     <div class="modal-header">
       <h2>Leaderboard</h2>
       <button class="btn-close" id="leaderboardClose">✕</button>
+    </div>
+    <div class="rules-tabs" id="lbTabs">
+      <button class="tab active" data-lb="multiplayer">Multiplayer</button>
+      <button class="tab" data-lb="arcade">Arcade</button>
     </div>
     <div class="modal-body" id="leaderboardBody"></div>
   </div>
@@ -266,6 +272,20 @@
     </div>
   </header>
   <main class="game-content" id="reactionContent"></main>
+</div>
+
+<!-- ── ARCADE VIEW ──────────────────────────────────────────── -->
+<div id="arcadeView" class="view">
+  <header class="topbar game-topbar">
+    <div class="topbar-left">
+      <button class="btn-back" id="arcadeLeaveBtn">← Back</button>
+      <span class="room-title" id="arcadeGameTitle">Arcade</span>
+    </div>
+    <div class="topbar-right">
+      <span class="game-type-badge" style="background:rgba(91,127,255,.1);color:var(--accent)">🕹️ Arcade</span>
+    </div>
+  </header>
+  <iframe id="arcadeIframe" class="arcade-iframe" sandbox="allow-scripts allow-same-origin allow-popups" allowfullscreen></iframe>
 </div>
 
 <script src="/qrcode.min.js"></script>

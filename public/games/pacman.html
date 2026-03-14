@@ -1,0 +1,722 @@
+<!DOCTYPE html><head>
+ <title>LittleJS AI Starter Project</title>
+ <meta charset=utf-8>
+ </head><body>
+ <script src="engine/littlejs.min.js"></script>
+ <script>
+'use strict';
+
+// engine settings
+debugWatermark = false; // Hide debug watermark in corner
+showEngineVersion = false; // Hide engine version console display
+
+// AI can use this class to make sound effects
+class SoundGenerator extends Sound 
+{
+    constructor(params = {})
+    {
+        const {
+            volume = 1,        // Volume scale (percent)
+            randomness = .05,  // How much to randomize frequency (percent Hz)
+            frequency = 220,   // Frequency of sound (Hz)
+            attack = 0,        // Attack time, how fast sound starts (seconds)
+            release = .1,      // Release time, how fast sound fades out (seconds)
+            shapeCurve = 1,    // Squarenes of wave (0=square, 1=normal, 2=pointy)
+            slide = 0,         // How much to slide frequency (kHz/s)
+            pitchJump = 0,     // Frequency of pitch jump (Hz)
+            pitchJumpTime = 0, // Time of pitch jump (seconds)
+            repeatTime = 0,    // Resets some parameters periodically (seconds)
+            noise = 0,         // How much random noise to add (percent)
+            bitCrush = 0,      // Resamples at a lower frequency in (samples*100)
+            delay = 0,         // Overlap sound with itself for reverb and flanger effects (seconds)
+        } = params;
+        
+        super([volume, randomness, frequency, attack, 0, release, 0, shapeCurve, slide, 0, pitchJump, pitchJumpTime, repeatTime, noise, 0, bitCrush, delay, 1, 0, 0, 0]);
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Pac-Man (tiny) — grid movement + simple ghosts
+// Controls: Arrow Keys = move, R = restart
+// Goal: eat all pellets; power pellets let you eat ghosts.
+// -----------------------------------------------------------------------------
+
+// --- tuneables
+const TILE = 1;
+const PLAYER_SPEED = .085;      // tiles per frame (60 fps fixed)
+const GHOST_SPEED  = .078;
+const FRIGHT_SPEED = .064;
+const POWER_FRAMES = 60*7;
+
+const COLLIDE_R2 = (.68)**2; // tuned for larger Pac-Man
+
+// --- level state
+let gridW, gridH;
+let walls;              // Uint8Array gridW*gridH (1=wall)
+let pellets;            // Uint8Array gridW*gridH (1=pellet)
+let powerPellets;       // Uint8Array gridW*gridH (1=power)
+let pelletCount = 0;
+
+let startCell;
+let ghostStartCells = [];
+
+// --- game state
+let player;
+let ghosts = [];
+let score = 0;
+let lives = 3;
+let win = false;
+let gameOver = false;
+
+let powerTimer = 0;
+let ghostEatChain = 0;
+
+// --- sounds
+let sPellet, sPower, sEatGhost, sDie, sWin;
+
+// -----------------------------------------------------------------------------
+function gameInit()
+{
+    setCanvasFixedSize(vec2(1280, 720));
+
+    // simple bleeps
+    sPellet   = new SoundGenerator({frequency: 780, release: .05, volume: .35, randomness: .02});
+    sPower    = new SoundGenerator({frequency: 420, release: .14, volume: .5, randomness: .03, pitchJump: 240, pitchJumpTime: .05});
+    sEatGhost = new SoundGenerator({frequency: 980, release: .12, volume: .55, randomness: .02, slide: .25});
+    sDie      = new SoundGenerator({frequency: 160, release: .25, volume: .7, randomness: .06, noise: .18, slide: -.35});
+    sWin      = new SoundGenerator({frequency: 640, release: .22, volume: .6, randomness: .02, repeatTime: .08});
+
+    buildLevel();
+    resetRun(true);
+}
+
+// -----------------------------------------------------------------------------
+function gameUpdate()
+{
+    if (keyWasPressed('KeyR'))
+        resetRun(false);
+
+    if (win || gameOver)
+        return;
+
+    // power timer
+    if (powerTimer > 0)
+        powerTimer--;
+    else
+        ghostEatChain = 0;
+
+    updatePlayer();
+    updateGhosts();
+    checkCollisions();
+
+    if (pelletCount <= 0)
+    {
+        win = true;
+        sWin.play();
+    }
+}
+
+// -----------------------------------------------------------------------------
+function gameUpdatePost()
+{
+    // stationary camera centered on the maze
+    cameraScale = 34;
+    cameraPos = vec2(gridW/2, gridH/2);
+}
+
+// -----------------------------------------------------------------------------
+function gameRender()
+{
+    // background
+    drawRect(vec2(gridW/2, gridH/2), vec2(gridW+10, gridH+10), rgb(.06,.06,.08));
+    drawRect(vec2(gridW/2, gridH/2), vec2(gridW, gridH), rgb(.10,.10,.12));
+
+    // walls
+    const wallColor = rgb(.12,.22,.6);
+    const wallInner = rgb(.06,.10,.25);
+    for (let y=0; y<gridH; y++)
+    for (let x=0; x<gridW; x++)
+    {
+        if (!isWallXY(x,y)) continue;
+        const p = vec2(x+.5, y+.5);
+        drawRect(p, vec2(.98,.98), wallColor);
+        drawRect(p, vec2(.78,.78), wallInner);
+    }
+
+    // pellets
+    for (let y=0; y<gridH; y++)
+    for (let x=0; x<gridW; x++)
+    {
+        const i = x + y*gridW;
+        if (pellets[i])
+            drawCircle(vec2(x+.5, y+.5), .10, rgb(.95,.9,.75));
+        else if (powerPellets[i])
+        {
+            const pulse = .30 + .09*oscillate(4, 1, time + (x+y)*.07);
+            drawCircle(vec2(x+.5, y+.5), pulse, rgb(.98,.90,.15));
+        }
+    }
+
+    // entities
+    drawPac(player);
+    for (const g of ghosts)
+        drawGhost(g);
+}
+
+// -----------------------------------------------------------------------------
+function gameRenderPost()
+{
+    // HUD strip
+    drawRect(vec2(mainCanvasSize.x/2, 34), vec2(mainCanvasSize.x, 72), hsl(0,0,0,.55), 0, false, true);
+
+    drawTextScreen(`SCORE ${score.toString().padStart(6,'0')}   LIVES ${lives}   PELLETS ${pelletCount}`, vec2(20, 24), 28, hsl(.58, .2, .92), 4, hsl(0,0,0,.7), 'left');
+
+    if (powerTimer > 0)
+        drawTextScreen(`POWER ${ceil(powerTimer/60)}s`, vec2(mainCanvasSize.x-260, 24), 28, hsl(.12, .6, .95), 4, hsl(0,0,0,.7), 'left');
+
+    if (win)
+        drawCenterBanner('YOU WIN!', 'Press R to restart');
+    else if (gameOver)
+        drawCenterBanner('GAME OVER', 'Press R to restart');
+    else
+        drawTextScreen('ARROWS: move', vec2(20, mainCanvasSize.y-26), 22, hsl(0,0,1), 3, hsl(0,0,0,.75), 'left');
+}
+
+// -----------------------------------------------------------------------------
+// Level
+
+function buildLevel()
+{
+    // Reusing the maze but turning open tiles into pellets.
+    // X = wall, . = pellet, o = power pellet, S = player spawn, E = ghost spawn
+    const rows = [
+        'XXXXXXXXXXXXXXXXXXXXXXXXXXXX',
+        'Xo...........XX.........o..X',
+        'X.XXXX.XXXXX.XX.XXXXX.X.XX.X',
+        'X....X.E...X....X....EX..X.X',
+        'X.XX.X.XXX.XXXXXX.XXX.XX.X.X',
+        'X......X..........X......X.X',
+        'XXXXXX.X.XXXXXXXX.X.XXXX.X.X',
+        'X......X....XX....X......X.X',
+        'X.XXXXXXXXX.XX.XXXXXXXXX.X.X',
+        'X.X..........S...........X.X',
+        'X.X.XXXXXXXX.XX.XXXXXXXX.X.X',
+        'X.X.X......X.XX.X......X.X.X',
+        'X...X.XXXX........XXXX.X...X',
+        'XXX.X....X.XXXXXX.X....X.XXX',
+        'X...XXXX.X........X.XXXX...X',
+        'X.X......XX.XXXX.XX......X.X',
+        'X.XXXXXXXXX.E..E.XXXXXXXXX.X',
+        'X..o........XXXX........o..X',
+        'XXXXXXXXXXXXXXXXXXXXXXXXXXXX',
+    ];
+
+    gridW = rows[0].length;
+    gridH = rows.length;
+    walls = new Uint8Array(gridW*gridH);
+    pellets = new Uint8Array(gridW*gridH);
+    powerPellets = new Uint8Array(gridW*gridH);
+    pelletCount = 0;
+
+    startCell = vec2(1,1);
+    ghostStartCells = [];
+
+    for (let r=0; r<gridH; r++)
+    for (let c=0; c<gridW; c++)
+    {
+        const ch = rows[r][c];
+        const x = c;
+        const y = gridH-1-r; // flip so y increases upward
+
+        if (ch === 'X')
+        {
+            setWallXY(x,y,1);
+            continue;
+        }
+
+        const i = x + y*gridW;
+
+        // pellets by default on open cells
+        if (ch === 'o')
+        {
+            powerPellets[i] = 1;
+            pelletCount++;
+        }
+        else
+        {
+            pellets[i] = 1;
+            pelletCount++;
+        }
+
+        if (ch === 'S')
+            startCell = vec2(x,y);
+        if (ch === 'E')
+            ghostStartCells.push(vec2(x,y));
+    }
+
+    // ensure spawn cells don't have pellets
+    clearPelletAt(startCell);
+    for (const g of ghostStartCells)
+        clearPelletAt(g);
+}
+
+function resetRun(isFirst)
+{
+    score = 0;
+    lives = 3;
+    win = false;
+    gameOver = false;
+    powerTimer = 0;
+    ghostEatChain = 0;
+
+    // rebuild pellets every run
+    buildLevel();
+
+    player = makeMover(startCell, vec2(1,0));
+    player.desiredDir = vec2(1,0);
+    player.faceDir = vec2(1,0);
+
+    const colors = [rgb(.95,.25,.25), rgb(.95,.55,.9), rgb(.25,.85,.95), rgb(.95,.65,.2)];
+    ghosts = [];
+    for (let i=0; i<min(4, ghostStartCells.length); i++)
+    {
+        const g = makeMover(ghostStartCells[i], vec2(-1,0));
+        g.color = colors[i%colors.length];
+        g.frightened = false;
+        g.homeCell = ghostStartCells[i].copy();
+        g.modeTimer = randInt(140, 60);
+        g.scatter = !!(i&1);
+        g.lastTurnCellKey = '';
+        ghosts.push(g);
+    }
+
+    if (!isFirst)
+        sPower.play();
+}
+
+// -----------------------------------------------------------------------------
+// Grid movers
+
+function makeMover(cell, dir)
+{
+    return {
+        cell: vec2(cell.x, cell.y), // integer
+        dir: dir.copy(),            // -1/0/1
+        t: 0,                       // 0..1 progress to next cell
+        pos: vec2(cell.x+.5, cell.y+.5),
+    };
+}
+
+function moverUpdatePos(m)
+{
+    const base = vec2(m.cell.x+.5, m.cell.y+.5);
+    m.pos = base.add(m.dir.scale(m.t));
+}
+
+function canMove(cell, dir)
+{
+    if (!dir.x && !dir.y)
+        return true;
+
+    let nx = cell.x + dir.x;
+    let ny = cell.y + dir.y;
+
+    // wrap tunnels (left/right)
+    if (nx < 0) nx = gridW-1;
+    else if (nx >= gridW) nx = 0;
+
+    return !isWallXY(nx, ny);
+}
+
+function stepCell(cell, dir)
+{
+    let nx = cell.x + dir.x;
+    let ny = cell.y + dir.y;
+
+    // wrap tunnels (left/right)
+    if (nx < 0) nx = gridW-1;
+    else if (nx >= gridW) nx = 0;
+
+    return vec2(nx, ny);
+}
+
+function tickMover(m, speed, onArriveCenter)
+{
+    // Robust grid stepping: we may cross a cell center this frame even if speed doesn't divide 1.
+    let remaining = speed;
+
+    for (let guard=0; guard<12 && remaining > 0; guard++)
+    {
+        if (!m.dir.x && !m.dir.y)
+            break;
+
+        // if we're at a center and the next cell is blocked, stop immediately (no "bounce"/penetration)
+        if (m.t <= 1e-6 && !canMove(m.cell, m.dir))
+        {
+            m.dir = vec2(0,0);
+            m.t = 0;
+            break;
+        }
+
+        const distToCenter = 1 - m.t;
+        if (remaining < distToCenter)
+        {
+            m.t += remaining;
+            remaining = 0;
+            break;
+        }
+
+        // arrive at next cell center
+        remaining -= distToCenter;
+        m.t = 0;
+
+        if (!canMove(m.cell, m.dir))
+        {
+            m.dir = vec2(0,0);
+            break;
+        }
+
+        m.cell = stepCell(m.cell, m.dir);
+
+        // allow game logic to run exactly at centers (turns, eating pellets, ghost AI)
+        onArriveCenter && onArriveCenter(m);
+    }
+
+    moverUpdatePos(m);
+}
+
+function atCellCenter(m)
+{
+    return m.t <= 1e-6;
+}
+
+// -----------------------------------------------------------------------------
+// Player
+
+function updatePlayer()
+{
+    // buffer desired direction
+    if (keyIsDown('ArrowUp'))    player.desiredDir = vec2(0,1);
+    if (keyIsDown('ArrowDown'))  player.desiredDir = vec2(0,-1);
+    if (keyIsDown('ArrowLeft'))  player.desiredDir = vec2(-1,0);
+    if (keyIsDown('ArrowRight')) player.desiredDir = vec2(1,0);
+
+    const onCenter = (p) =>
+    {
+        // eat pellets/power the instant we reach a cell center
+        eatAtCell(p.cell);
+
+        // apply buffered turn at centers
+        if (canMove(p.cell, p.desiredDir))
+            p.dir = p.desiredDir.copy();
+        else if (!canMove(p.cell, p.dir))
+            p.dir = vec2(0,0);
+
+        // remember facing direction for drawing
+        if (p.dir.x || p.dir.y)
+            p.faceDir = p.dir.copy();
+    };
+
+    // if already at a center, run center logic before moving
+    if (atCellCenter(player))
+        onCenter(player);
+
+    tickMover(player, PLAYER_SPEED, onCenter);
+}
+
+function eatAtCell(cell)
+{
+    const i = cell.x + cell.y*gridW;
+    if (pellets[i])
+    {
+        pellets[i] = 0;
+        pelletCount--;
+        score += 10;
+        sPellet.play();
+    }
+    else if (powerPellets[i])
+    {
+        powerPellets[i] = 0;
+        pelletCount--;
+        score += 50;
+        powerTimer = POWER_FRAMES;
+        ghostEatChain = 0;
+        for (const g of ghosts)
+            g.frightened = true;
+        sPower.play();
+    }
+}
+
+function clearPelletAt(cell)
+{
+    const i = cell.x + cell.y*gridW;
+    if (pellets[i]) { pellets[i]=0; pelletCount--; }
+    if (powerPellets[i]) { powerPellets[i]=0; pelletCount--; }
+}
+
+// -----------------------------------------------------------------------------
+// Ghosts
+
+function updateGhosts()
+{
+    const frightened = powerTimer > 0;
+    for (const g of ghosts)
+        g.frightened = frightened;
+
+    for (const g of ghosts)
+    {
+        // mode flip sometimes for variety
+        if (--g.modeTimer <= 0)
+        {
+            g.modeTimer = randInt(180, 90);
+            g.scatter = !g.scatter;
+        }
+
+        const onCenter = (gm) =>
+        {
+            const choices = getMoveChoices(gm.cell);
+
+            // avoid reversing unless forced
+            const back = gm.dir.scale(-1);
+            const filtered = choices.filter(d => !(d.x===back.x && d.y===back.y));
+            const dirs = filtered.length ? filtered : choices;
+
+            gm.dir = gm.frightened ? chooseFrightDir(dirs, gm) : chooseChaseDir(dirs, gm);
+        };
+
+        // if already at a center, decide direction before moving
+        if (atCellCenter(g))
+            onCenter(g);
+
+        const spd = g.frightened ? FRIGHT_SPEED : GHOST_SPEED;
+        tickMover(g, spd, onCenter);
+    }
+}
+
+function getMoveChoices(cell)
+{
+    const dirs = [vec2(1,0), vec2(-1,0), vec2(0,1), vec2(0,-1)];
+    return dirs.filter(d => canMove(cell, d));
+}
+
+function chooseChaseDir(dirs, g)
+{
+    // very small Pac-Man-like flavor: scatter targets corners, otherwise chase player
+    const corners = [vec2(1,gridH-2), vec2(gridW-2,gridH-2), vec2(1,1), vec2(gridW-2,1)];
+    const scatterTarget = corners[(ghosts.indexOf(g)) % corners.length];
+
+    const targetCell = g.scatter ? scatterTarget : player.cell;
+
+    // pick direction that minimizes distance to target (grid distance)
+    let best = dirs[0];
+    let bestD = 1e9;
+    for (const d of dirs)
+    {
+        const n = stepCell(g.cell, d);
+        const dx = targetCell.x - n.x;
+        const dy = targetCell.y - n.y;
+        const dist = dx*dx + dy*dy;
+        if (dist < bestD)
+        {
+            bestD = dist;
+            best = d;
+        }
+    }
+    return best;
+}
+
+function chooseFrightDir(dirs, g)
+{
+    // When powered up, ghosts try to run AWAY from the player.
+    // Pick direction that MAXIMIZES distance to player.
+    let best = dirs[0];
+    let bestD = -1;
+    for (const d of dirs)
+    {
+        const n = stepCell(g.cell, d);
+        const dx = player.cell.x - n.x;
+        const dy = player.cell.y - n.y;
+        const dist = dx*dx + dy*dy;
+        if (dist > bestD)
+        {
+            bestD = dist;
+            best = d;
+        }
+    }
+    return best;
+}
+
+function randomChoice(a)
+{
+    return a[randInt(a.length)];
+}
+
+// -----------------------------------------------------------------------------
+// Collisions + life
+
+function checkCollisions()
+{
+    for (const g of ghosts)
+    {
+        if (g.pos.distanceSquared(player.pos) > COLLIDE_R2)
+            continue;
+
+        if (powerTimer > 0)
+        {
+            ghostEatChain++;
+            const ghostScore = 200 * (1 << min(3, ghostEatChain-1));
+            score += ghostScore;
+            sEatGhost.play();
+
+            // respawn ghost at home
+            g.cell = g.homeCell.copy();
+            g.dir = vec2(0,0);
+            g.t = 0;
+            moverUpdatePos(g);
+        }
+        else
+        {
+            onPlayerDie();
+            return;
+        }
+    }
+}
+
+function onPlayerDie()
+{
+    lives--;
+    sDie.play();
+
+    if (lives <= 0)
+    {
+        gameOver = true;
+        return;
+    }
+
+    // reset positions only
+    player.cell = startCell.copy();
+    player.dir = vec2(1,0);
+    player.desiredDir = vec2(1,0);
+    player.t = 0;
+    moverUpdatePos(player);
+
+    for (let i=0; i<ghosts.length; i++)
+    {
+        const g = ghosts[i];
+        g.cell = g.homeCell.copy();
+        g.dir = vec2(-1,0);
+        g.t = 0;
+        moverUpdatePos(g);
+    }
+
+    powerTimer = 0;
+    ghostEatChain = 0;
+}
+
+// -----------------------------------------------------------------------------
+// Collision helpers (grid)
+
+function isWallXY(x, y)
+{
+    if (x < 0 || y < 0 || x >= gridW || y >= gridH)
+        return 1;
+    return walls[x + y*gridW];
+}
+
+function setWallXY(x, y, v)
+{
+    if (x < 0 || y < 0 || x >= gridW || y >= gridH)
+        return;
+    walls[x + y*gridW] = v ? 1 : 0;
+}
+
+// -----------------------------------------------------------------------------
+// Drawing helpers
+
+function drawPac(p)
+{
+    // make Pac-Man clearly larger
+    const r = .78;
+
+    // face the last movement direction (or desired direction) so mouth looks right when stopped
+    const face = (p.faceDir && (p.faceDir.x || p.faceDir.y)) ? p.faceDir : (p.desiredDir || vec2(1,0));
+    const dirAngle = face.angle();
+    const dirVec = vec2().setAngle(dirAngle, 1);
+
+    const moving = p.dir.x || p.dir.y;
+
+    // chomp: slower and readable
+    const wFast = .5 + .5*oscillate(4.2, 1, time);
+    const wIdle = .5 + .5*oscillate(2.4, 1, time);
+
+    // When moving, allow the mouth to fully close (open can hit ~0).
+    // When idle, keep it slightly open.
+    const open = moving ? wFast : (.05 + .15*wIdle); // moving 0..1, idle ~0.05..0.20
+
+    // body
+    drawCircle(p.pos, r, rgb(.98,.90,.15));
+
+    // mouth cut: keep it a bit closer to center, and let size get near 0 when closed
+    const mouthScale = 1.65;
+    const cutRadius = r * (0.01 + 0.52*open) * mouthScale;
+    const cutOffset = r * (0.12 + 0.42*open); // closer to center than before
+    drawCircle(p.pos.add(dirVec.scale(cutOffset)), cutRadius, rgb(.10,.10,.12));
+
+    // tiny eye
+    const eye = p.pos.add(vec2().setAngle(dirAngle + PI/2, r*.28)).add(dirVec.scale(-r*.14));
+    drawCircle(eye, r*.085, rgb(.05,.05,.07));
+}
+
+
+function drawGhost(g)
+{
+    const frightened = powerTimer > 0;
+    const c = frightened ? rgb(.25,.35,.95) : g.color;
+
+    const r = .42;
+    const bob = .03*oscillate(6, 1, time + g.cell.x*.13 + g.cell.y*.17);
+
+    // body
+    drawCircle(g.pos.add(vec2(0,bob)), r, c);
+    drawRect(g.pos.add(vec2(0, -r*.35 + bob)), vec2(r*1.9, r*1.2), c);
+
+    // feet scallops
+    const footY = g.pos.y - r*.65 + bob;
+    for (let i=-2; i<=2; i++)
+        drawCircle(vec2(g.pos.x + i*.18, footY), .13, c);
+
+    // face
+    if (frightened)
+    {
+        // eyes
+        drawCircle(g.pos.add(vec2(-.14, .08 + bob)), .09, rgb(1,1,1));
+        drawCircle(g.pos.add(vec2(.14, .08 + bob)), .09, rgb(1,1,1));
+        drawCircle(g.pos.add(vec2(-.14, .08 + bob)), .04, rgb(.05,.05,.07));
+        drawCircle(g.pos.add(vec2(.14, .08 + bob)), .04, rgb(.05,.05,.07));
+        // mouth
+        drawRect(g.pos.add(vec2(0, -.10 + bob)), vec2(.22, .06), rgb(.95,.95,.98));
+    }
+    else
+    {
+        const look = g.dir.x || g.dir.y ? g.dir.normalize().scale(.05) : vec2();
+        const e1 = g.pos.add(vec2(-.14, .10 + bob));
+        const e2 = g.pos.add(vec2(.14, .10 + bob));
+        drawCircle(e1, .10, rgb(1,1,1));
+        drawCircle(e2, .10, rgb(1,1,1));
+        drawCircle(e1.add(look), .05, rgb(.1,.1,.2));
+        drawCircle(e2.add(look), .05, rgb(.1,.1,.2));
+    }
+}
+
+function drawCenterBanner(title, subtitle)
+{
+    drawRect(mainCanvasSize.scale(.5), vec2(720, 190), hsl(0,0,0,.7), 0, false, true);
+    drawTextScreen(title, vec2(mainCanvasSize.x/2, mainCanvasSize.y/2 - 18), 92, hsl(.12,.2,1), 10, hsl(0,0,0,.9));
+    drawTextScreen(subtitle, vec2(mainCanvasSize.x/2, mainCanvasSize.y/2 + 62), 30, hsl(.58,.1,.95), 6, hsl(0,0,0,.9));
+}
+// -----------------------------------------------------------------------------
+// Startup LittleJS Engine
+engineInit(gameInit, gameUpdate, gameUpdatePost, gameRender, gameRenderPost);
+
+ </script>
+<script>(function(){const G='pacman';let r=false;setInterval(()=>{if(typeof gameOver!=='undefined'&&gameOver&&!r&&score>0){r=true;try{parent.postMessage({type:'arcade-score',game:G,score:score},'*')}catch(e){}}if(typeof gameOver!=='undefined'&&!gameOver)r=false},500)})();</script>

@@ -28,7 +28,7 @@ const SH_ROLE_EMOJI = ['🕊️', '🦅', '💀'];
 const $ = (s, p) => (p || document).querySelector(s);
 const $$ = (s, p) => (p || document).querySelectorAll(s);
 
-const views = { join: $('#joinView'), lobby: $('#lobbyView'), game: $('#gameView'), tower: $('#towerView'), magic8: $('#magic8View'), reaction: $('#reactionView') };
+const views = { join: $('#joinView'), lobby: $('#lobbyView'), game: $('#gameView'), tower: $('#towerView'), magic8: $('#magic8View'), reaction: $('#reactionView'), arcade: $('#arcadeView') };
 const modals = {
   leaderboard: $('#leaderboardModal'), rules: $('#rulesModal'), createRoom: $('#createRoomModal'), password: $('#passwordModal')
 };
@@ -1138,6 +1138,75 @@ window.tryJoinRoom = function(id, locked) {
   joinRoom(id);
 };
 
+// ── Arcade ───────────────────────────────────────────────────────
+const ARCADE_GAMES = [
+  { id:'tetris',     name:'Tetris',          icon:'🧱', cat:'Classics', desc:'Stack falling blocks to clear lines',              path:'/games/tetris.html',          hasScore:true },
+  { id:'snake',      name:'Snake',           icon:'🐍', cat:'Classics', desc:'Eat food and grow without hitting yourself',       path:'/games/snake.html',           hasScore:true },
+  { id:'flappyBird', name:'Flappy Bird',     icon:'🐦', cat:'Classics', desc:'Tap to fly through the pipes',                    path:'/games/flappyBird.html',      hasScore:true },
+  { id:'pacman',     name:'Pac-Man',         icon:'👾', cat:'Classics', desc:'Eat all the pellets, avoid the ghosts',           path:'/games/pacman.html',          hasScore:true },
+  { id:'asteroids',  name:'Asteroids',       icon:'☄️', cat:'Classics', desc:'Blast space rocks in every direction',             path:'/games/asteroids.html',       hasScore:true },
+  { id:'spaceInvaders',name:'Space Invaders',icon:'👽', cat:'Classics', desc:'Defend Earth from alien waves',                   path:'/games/spaceInvaders.html',   hasScore:true },
+  { id:'breakout',   name:'Breakout',        icon:'🏓', cat:'Classics', desc:'Bounce the ball to break all bricks',             path:'/games/breakout.html',        hasScore:true },
+  { id:'frogger',    name:'Frogger',         icon:'🐸', cat:'Classics', desc:'Cross roads and rivers to reach home',            path:'/games/frogger.html',         hasScore:true },
+  { id:'pong',       name:'Pong',            icon:'🏏', cat:'Classics', desc:'Classic paddle tennis — first to 10 wins',        path:'/games/pong.html',            hasScore:true },
+  { id:'missileCommand',name:'Missile Command',icon:'🚀',cat:'Classics',desc:'Protect your cities from incoming missiles',     path:'/games/missileCommand.html',  hasScore:true },
+  { id:'basketball', name:'Basketball',      icon:'🏀', cat:'Classics', desc:'Shoot hoops and rack up points',                  path:'/games/basketball.html',      hasScore:true },
+  { id:'2048',       name:'2048',            icon:'🔢', cat:'Puzzle',   desc:'Slide tiles to merge and reach 2048',             path:'/games/2048.html',            hasScore:true },
+  { id:'minesweeper',name:'Minesweeper',     icon:'💣', cat:'Puzzle',   desc:'Clear the field without hitting a mine',          path:'/games/minesweeper.html',     hasScore:true },
+  { id:'sokoban',    name:'Sokoban',         icon:'📦', cat:'Puzzle',   desc:'Push boxes onto targets in fewest moves',         path:'/games/sokoban.html',         hasScore:false },
+  { id:'othello',    name:'Othello',         icon:'⚫', cat:'Puzzle',   desc:'Flip your opponent\'s pieces to dominate',        path:'/games/othello.html',         hasScore:true },
+  { id:'lunarLander',name:'Lunar Lander',    icon:'🌙', cat:'Action',   desc:'Land your spacecraft safely on the moon',         path:'/games/lunarLander.html',     hasScore:true },
+  { id:'miniGolf',   name:'Mini Golf',       icon:'⛳', cat:'Action',   desc:'Putt your way through tricky courses',            path:'/games/miniGolf.html',        hasScore:true },
+  { id:'whacAMole',  name:'Whac-A-Mole',    icon:'🔨', cat:'Quick Play',desc:'Whack moles as fast as you can',                 path:'/games/whacAMole.html',       hasScore:true },
+  { id:'simonSays',  name:'Simon Says',      icon:'🧠', cat:'Quick Play',desc:'Repeat the growing color pattern',               path:'/games/simonSays.html',       hasScore:true },
+  { id:'colorMatch', name:'Color Match',     icon:'🎨', cat:'Quick Play',desc:'Pick the display color, not the word',           path:'/games/colorMatch.html',      hasScore:true },
+  { id:'hexgl',      name:'HexGL',           icon:'🏎️', cat:'3D Showcase',desc:'Futuristic anti-gravity racing (Wipeout-style)',path:'/games/hexgl/index.html',     hasScore:true },
+  { id:'synthblast', name:'SYNTHBLAST',      icon:'🔫', cat:'3D Showcase',desc:'Retro-futuristic tank shooter with synthwave vibes',path:'/games/synthblast/index.html',hasScore:true },
+  { id:'astray',     name:'Astray',          icon:'🧩', cat:'3D Showcase',desc:'Navigate a 3D maze with physics — tilt to roll',path:'/games/astray/index.html',    hasScore:true },
+];
+
+function renderArcadeGrid() {
+  const grid = document.getElementById('arcadeGrid');
+  if (!grid) return;
+  const cats = [...new Set(ARCADE_GAMES.map(g => g.cat))];
+  let html = '';
+  cats.forEach(cat => {
+    html += `<div class="arcade-category-label">${cat}</div>`;
+    ARCADE_GAMES.filter(g => g.cat === cat).forEach(g => {
+      html += `<div class="room-card solo-card arcade-card" onclick="launchArcadeGame('${g.id}')">
+        <div class="room-card-header">
+          <span class="room-card-name">${g.icon} ${g.name}</span>
+          ${g.hasScore ? '<span class="arcade-lb-badge">🏆 Leaderboard</span>' : ''}
+        </div>
+        <p style="font-size:.8rem;color:var(--text-secondary);margin:8px 0">${g.desc}</p>
+        <button class="room-join-btn">Play</button>
+      </div>`;
+    });
+  });
+  grid.innerHTML = html;
+}
+
+window.launchArcadeGame = function(id) {
+  const g = ARCADE_GAMES.find(x => x.id === id);
+  if (!g) return;
+  const title = document.getElementById('arcadeGameTitle');
+  if (title) title.textContent = g.icon + ' ' + g.name;
+  const iframe = document.getElementById('arcadeIframe');
+  if (iframe) iframe.src = g.path;
+  showView('arcade');
+};
+
+window.addEventListener('message', function(e) {
+  if (!e.data || e.data.type !== 'arcade-score') return;
+  const { game, score } = e.data;
+  if (!game || score === undefined || !username) return;
+  fetch('/api/arcade-score', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ u: username, game, score })
+  }).catch(() => {});
+});
+
 // ── Tower of Words ───────────────────────────────────────────────
 let towerWords = [];
 let towerLetter = '';
@@ -1467,6 +1536,43 @@ function loadLeaderboard() {
   });
 }
 
+let arcadeLbGame = '';
+
+function loadArcadeLeaderboard(game) {
+  if (game) arcadeLbGame = game;
+  let html = '<div style="margin-bottom:12px"><label style="font-size:.85rem;color:var(--text-secondary);margin-right:8px">Game:</label>';
+  html += '<select id="arcadeLbSelect" style="background:var(--bg-tertiary);color:var(--text-primary);border:1px solid var(--border);border-radius:6px;padding:4px 8px;font-size:.85rem">';
+  ARCADE_GAMES.filter(g => g.hasScore).forEach(g => {
+    const sel = g.id === arcadeLbGame ? ' selected' : '';
+    html += `<option value="${g.id}"${sel}>${g.icon} ${g.name}</option>`;
+  });
+  html += '</select></div>';
+  if (!arcadeLbGame) arcadeLbGame = ARCADE_GAMES.find(g => g.hasScore)?.id || '';
+  html += '<div id="arcadeLbBody"><p style="text-align:center;color:var(--text-muted)">Loading...</p></div>';
+  $('#leaderboardBody').innerHTML = html;
+  const sel = document.getElementById('arcadeLbSelect');
+  if (sel) {
+    sel.addEventListener('change', () => loadArcadeLeaderboard(sel.value));
+    arcadeLbGame = sel.value;
+  }
+  fetch(`/api/arcade-leaderboard?game=${encodeURIComponent(arcadeLbGame)}`).then(r => r.json()).then(data => {
+    const body = document.getElementById('arcadeLbBody');
+    if (!body) return;
+    if (!data.length) { body.innerHTML = '<p style="text-align:center;color:var(--text-muted)">No scores yet for this game.</p>'; return; }
+    let t = '<table class="lb-table"><thead><tr><th>#</th><th>Player</th><th>Score</th></tr></thead><tbody>';
+    data.forEach(e => {
+      const medal = e.r === 1 ? '🥇' : e.r === 2 ? '🥈' : e.r === 3 ? '🥉' : e.r;
+      const cls = e.r <= 3 ? ['','gold','silver','bronze'][e.r] : '';
+      t += `<tr class="${e.u === username ? 'me' : ''}"><td class="lb-rank ${cls}">${medal}</td><td>${avatarHTML(e.u, 22)} ${esc(e.u)}</td><td style="font-weight:700;color:var(--accent)">${e.s}</td></tr>`;
+    });
+    t += '</tbody></table>';
+    body.innerHTML = t;
+  }).catch(() => {
+    const body = document.getElementById('arcadeLbBody');
+    if (body) body.innerHTML = '<p style="color:var(--red)">Failed to load.</p>';
+  });
+}
+
 // ── Rules ────────────────────────────────────────────────────────
 function loadRules(game) {
   fetch(`/rules/${game}.json`).then(r => r.json()).then(data => {
@@ -1666,6 +1772,24 @@ function init() {
     if (rxTimeout) { clearTimeout(rxTimeout); rxTimeout = null; }
     rxState = 'idle';
     showView('lobby');
+  });
+
+  // Arcade
+  renderArcadeGrid();
+  $('#arcadeLeaveBtn').addEventListener('click', () => {
+    const iframe = document.getElementById('arcadeIframe');
+    if (iframe) iframe.src = 'about:blank';
+    showView('lobby');
+  });
+
+  // Leaderboard tabs
+  $$('#lbTabs .tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      $$('#lbTabs .tab').forEach(t => t.classList.remove('active'));
+      tab.classList.add('active');
+      if (tab.dataset.lb === 'multiplayer') loadLeaderboard();
+      else loadArcadeLeaderboard();
+    });
   });
 
   // Modal backdrop clicks

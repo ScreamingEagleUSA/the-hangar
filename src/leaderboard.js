@@ -85,6 +85,45 @@ const Leaderboard = {
     }
   },
 
+  async recordArcadeScore(username, game, score) {
+    if (!_supabase) return;
+    try {
+      const { data } = await _supabase
+        .from('arcade_scores')
+        .select('score')
+        .eq('username', username)
+        .eq('game', game)
+        .single();
+      if (data && data.score >= score) return;
+      await _supabase.from('arcade_scores').upsert(
+        { username, game, score, created_at: new Date().toISOString() },
+        { onConflict: 'username,game' }
+      );
+    } catch (e) {
+      if (e.code === 'PGRST116') {
+        await _supabase.from('arcade_scores').insert({ username, game, score });
+      } else {
+        console.error('Arcade score error:', e.message);
+      }
+    }
+  },
+
+  async getArcadeLeaderboard(game) {
+    if (!_supabase) return [];
+    try {
+      const { data } = await _supabase
+        .from('arcade_scores')
+        .select('username, score')
+        .eq('game', game)
+        .order('score', { ascending: false })
+        .limit(20);
+      return (data || []).map((r, i) => ({ r: i + 1, u: r.username, s: r.score }));
+    } catch (e) {
+      console.error('Arcade leaderboard error:', e.message);
+      return [];
+    }
+  },
+
   serialize() {
     const active = _entries.filter(e => e.active && e.gamesPlayed > 0);
     active.sort((a, b) => b.wins - a.wins);

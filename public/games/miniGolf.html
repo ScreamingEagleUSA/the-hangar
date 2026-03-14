@@ -1,0 +1,808 @@
+<!DOCTYPE html><head>
+<title>Mini Golf</title>
+<meta charset="utf-8">
+</head><body style="background:#000">
+<script src="engine/littlejs.min.js"></script>
+<script src="engine/box2d.wasm.js"></script>
+<script>
+'use strict';
+
+// engine settings, do not remove
+debugWatermark = false; // Hide debug watermark in corner
+showEngineVersion = false; // Hide engine version console display
+paused = false; // Start unpaused
+debugKey = 'Backquote'; // Use tilde key for debug instead of Escape
+
+// engine settings, customize if necessary
+gravity = vec2(0, 0); // No gravity by default
+cameraPos = vec2(0, 0); // Camera centered at origin
+cameraScale = 32; // Camera zoom, larger is more zoomed in
+
+// AI can use this class to make sound effects
+class SoundGenerator extends Sound 
+{
+    constructor(params = {})
+    {
+        const {
+            volume = 1,        // Volume scale (percent)
+            randomness = .05,  // How much to randomize frequency (percent Hz)
+            frequency = 220,   // Frequency of sound (Hz)
+            attack = 0,        // Attack time, how fast sound starts (seconds)
+            release = .1,      // Release time, how fast sound fades out (seconds)
+            shapeCurve = 1,    // Squarenes of wave (0=square, 1=normal, 2=pointy)
+            slide = 0,         // How much to slide frequency (kHz/s)
+            pitchJump = 0,     // Frequency of pitch jump (Hz)
+            pitchJumpTime = 0, // Time of pitch jump (seconds)
+            repeatTime = 0,    // Resets some parameters periodically (seconds)
+            noise = 0,         // How much random noise to add (percent)
+            bitCrush = 0,      // Resamples at a lower frequency in (samples*100)
+            delay = 0,         // Overlap sound with itself for reverb and flanger effects (seconds)
+        } = params;
+        
+        super([volume, randomness, frequency, attack, 0, release, 0, shapeCurve, slide, 0, pitchJump, pitchJumpTime, repeatTime, noise, 0, bitCrush, delay, 1, 0, 0, 0]);
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////////
+// mini golf (box2d)
+
+// course constants
+const COURSE_SIZE = vec2(34, 18);
+const WALL_THICKNESS = 1;
+const BALL_DIAMETER = 1.0;
+const HOLE_DIAMETER = 1.6;
+const HOLE_RING_DIAMETER = 2.2;
+const MAX_DRAG = 10;        // world units
+const SHOT_STRENGTH = 22;   // impulse scale
+const STOP_SPEED = .2;
+
+// game state
+let courseObjects = [];
+let movingObstacles = [];  // obstacles that move back and forth
+let ball, hole;
+let holeIndex = 0;
+let holeStrokes = 0;
+let totalStrokes = 0;
+let completeTimer = new Timer();
+let gameState = 'menu';  // 'menu' or 'play'
+
+// aiming
+let aiming = false;
+let aimDrag = vec2();
+
+// sounds
+let sfxHit, sfxSink, sfxBounce;
+
+// holes (hand-built layouts) - 9 holes total
+const holes = [
+    // Hole 1: Gentle Introduction - simple S-curve
+    {
+        tee:  vec2(-14, -5),
+        hole: vec2( 14,  5),
+        obstacles: [
+            {type:'box', pos:vec2(-7, 5), size:vec2(8, 1.2), angle:0},
+            {type:'box', pos:vec2( 7,-5), size:vec2(8, 1.2), angle:0},
+            {type:'circle', pos:vec2(0, 0), diameter:2.5},
+        ],
+    },
+    // Hole 2: Pinball Bumpers - chaotic bounces
+    {
+        tee:  vec2(-14, 0),
+        hole: vec2( 14, 0),
+        obstacles: [
+            {type:'circle', pos:vec2(-8,  5), diameter:2.5},
+            {type:'circle', pos:vec2(-8, -5), diameter:2.5},
+            {type:'circle', pos:vec2(-3,  0), diameter:2.0},
+            {type:'circle', pos:vec2( 0,  6), diameter:2.2},
+            {type:'circle', pos:vec2( 0, -6), diameter:2.2},
+            {type:'circle', pos:vec2( 3,  0), diameter:2.0},
+            {type:'circle', pos:vec2( 8,  5), diameter:2.5},
+            {type:'circle', pos:vec2( 8, -5), diameter:2.5},
+        ],
+    },
+    // Hole 3: Corridor with pillars
+    {
+        tee:  vec2(-14,  0),
+        hole: vec2( 14,  0),
+        obstacles: [
+            {type:'box', pos:vec2( 0,  5), size:vec2(24, 1.2), angle:0},
+            {type:'box', pos:vec2( 0, -5), size:vec2(24, 1.2), angle:0},
+            {type:'circle', pos:vec2(-6, 0), diameter:3.0},
+            {type:'circle', pos:vec2( 0, 0), diameter:2.5},
+            {type:'circle', pos:vec2( 6, 0), diameter:3.0},
+        ],
+    },
+    // Hole 4: Dogleg Right - bank shot around the corner
+    {
+        tee:  vec2(2, -5),
+        hole: vec2( 14, -3),
+        obstacles: [
+            // L-shaped wall forces you to go right then up
+            {type:'box', pos:vec2(2, 2.4), size:vec2(13.2, 1.2), angle:0},  // horizontal blocker (extended to overlap corner)
+            {type:'box', pos:vec2(8, -3), size:vec2(1.2, 12), angle:0},     // vertical wall (touches bottom)
+            // Circle bumpers in the corners
+            {type:'circle', pos:vec2(-14, 6), diameter:5.0},
+            {type:'circle', pos:vec2(-14, -6), diameter:4.0},
+        ],
+    },
+    // Hole 5: The Gauntlet - narrow corridor with bumpers
+    {
+        tee:  vec2(-14, 0),
+        hole: vec2( 14, 0),
+        obstacles: [
+            // Corridor walls - wider gap, thinner walls
+            {type:'box', pos:vec2(0, 5), size:vec2(20, 0.8), angle:0},
+            {type:'box', pos:vec2(0, -5), size:vec2(20, 0.8), angle:0},
+            // Staggered bumpers inside the corridor
+            {type:'circle', pos:vec2(-6, 1.8), diameter:2.0},
+            {type:'circle', pos:vec2(-2, -1.8), diameter:2.0},
+            {type:'circle', pos:vec2(2, 1.8), diameter:2.0},
+            {type:'circle', pos:vec2(6, -1.8), diameter:2.0},
+        ],
+    },
+    // Hole 6: L-Shape Course - corner blocked by walls
+    {
+        tee:  vec2(-12, -6),
+        hole: vec2( 9,  7),
+        obstacles: [
+            // Block top-right corner to create L-shape
+            {type:'box', pos:vec2( 7,  4), size:vec2(11.2, 1.2), angle:0},   // horizontal wall (extended by 1.2 for corner)
+            {type:'box', pos:vec2( 2,  7), size:vec2(1.2, 6), angle:0},      // vertical wall (connects to edge)
+            // Blocker
+            {type:'box', pos:vec2(-3, -6), size:vec2(1.2, 8), angle:0},      // vertical
+            // Obstacles in the path
+            {type:'circle', pos:vec2(-12, 4), diameter:9.5},
+            {type:'circle', pos:vec2( 13, -5), diameter:7.5},
+        ],
+    },
+    // Hole 7: U-Shape with angled bounce walls
+    {
+        tee:  vec2(-12, 5),
+        hole: vec2(-12, -5),
+        obstacles: [
+            // Horizontal wall blocking direct path - extends to left edge
+            {type:'box', pos:vec2(-6, 0), size:vec2(22, 1.5), angle:0},
+            // Angled bounce walls on the right side (45 degrees, rotated to bounce back)
+            {type:'box', pos:vec2( 14, 6), size:vec2(10, 1.2), angle:-0.785},  // top-right angled
+            {type:'box', pos:vec2( 14,-6), size:vec2(10, 1.2), angle: 0.785},  // bottom-right angled
+        ],
+    },
+    // Hole 8: Snake Path - two vertical walls create S-pattern
+    {
+        tee:  vec2(-14, 0),
+        hole: vec2( 14, 0),
+        obstacles: [
+            // Wall from top going most of the way down
+            {type:'box', pos:vec2(-8, 3), size:vec2(1.5, 12), angle:0},
+            // Wall from bottom going most of the way up  
+            {type:'box', pos:vec2( 8,-3), size:vec2(1.5, 12), angle:0},
+            // center circle
+            {type:'circle', pos:vec2(0, 0), diameter:2},
+        ],
+    },
+    // Hole 9: Timing Challenge - moving blocker you must time your shot through
+    {
+        tee:  vec2(-12, 0),
+        hole: vec2( 12, 0),
+        obstacles: [
+            // Side walls
+            {type:'box', pos:vec2(0, 6), size:vec2(20, 1.2), angle:0},  // top wall
+            {type:'box', pos:vec2(0,-6), size:vec2(20, 1.2), angle:0},  // bottom wall
+            // Circle bumpers on either side of the moving blocker
+            {type:'circle', pos:vec2(-6, 0), diameter:3.5},
+            {type:'circle', pos:vec2( 6, 0), diameter:3.5},
+            // Moving blocker in the center - moves up and down
+            {type:'moving', pos:vec2(0, 0), size:vec2(1.5, 7), angle:0, moveAxis:'y', moveRange:4, moveSpeed:3},
+        ],
+    },
+];
+
+///////////////////////////////////////////////////////////////////////////////
+// helpers
+
+function drawRectScreenSpace(pos, size, color)
+{
+    mainContext.fillStyle = color.toString();
+    mainContext.fillRect(pos.x - size.x/2, pos.y - size.y/2, size.x, size.y);
+}
+
+function drawRotatedRectScreenSpace(pos, size, angle, color)
+{
+    mainContext.save();
+    mainContext.translate(pos.x, pos.y);
+    mainContext.rotate(-angle);  // negative because screen Y is flipped
+    mainContext.fillStyle = color.toString();
+    mainContext.fillRect(-size.x/2, -size.y/2, size.x, size.y);
+    mainContext.restore();
+}
+
+function drawCircleScreenSpace(pos, radius, color)
+{
+    mainContext.fillStyle = color.toString();
+    mainContext.beginPath();
+    mainContext.arc(pos.x, pos.y, radius, 0, Math.PI * 2);
+    mainContext.fill();
+}
+
+function addCourseObject(o)
+{
+    courseObjects.push(o);
+    return o;
+}
+
+function clearCourse()
+{
+    aiming = false;
+    aimDrag = vec2();
+
+    if (ball) ball.destroy();
+    if (hole) hole.destroy();
+
+    for (const o of courseObjects)
+        o.destroy();
+    courseObjects.length = 0;
+    movingObstacles.length = 0;
+}
+
+function createWall(pos, size, angle=0)
+{
+    const w = addCourseObject(new Box2dStaticObject(pos));
+    w.color = rgb(.2,.25,.2);
+    w.outlineColor = rgb(0,0,0,.5);
+    w.lineWidth = .08;
+    // higher restitution so the ball bounces more off walls
+    w.addBox(size, vec2(), angle, 0, .25, .9);
+    return w;
+}
+
+function createBumper(pos, size, angle=0)
+{
+    const b = addCourseObject(new Box2dStaticObject(pos));
+    b.color = rgb(.5,.4,.2);
+    b.outlineColor = rgb(0,0,0,.6);
+    b.lineWidth = .08;
+    b.addBox(size, vec2(), angle, 0, .3, .6);
+    return b;
+}
+
+function createPillar(pos, diameter)
+{
+    const p = addCourseObject(new Box2dStaticObject(pos));
+    p.color = rgb(.45,.45,.5);
+    p.outlineColor = rgb(0,0,0,.6);
+    p.lineWidth = .08;
+    p.addCircle(diameter, vec2(), 0, .3, .4);
+    return p;
+}
+
+function createMovingBumper(pos, size, angle, moveAxis, moveRange, moveSpeed)
+{
+    const b = addCourseObject(new Box2dStaticObject(pos));
+    b.color = rgb(.7,.3,.3);  // red-ish to indicate it moves
+    b.outlineColor = rgb(0,0,0,.6);
+    b.lineWidth = .08;
+    b.addBox(size, vec2(), angle, 0, .3, .6);
+    
+    // Store movement info on the object
+    movingObstacles.push({
+        obj: b,
+        basePos: pos.copy(),
+        moveAxis: moveAxis,  // 'x' or 'y'
+        moveRange: moveRange,
+        moveSpeed: moveSpeed,
+        phase: 0,  // current phase of oscillation
+    });
+    return b;
+}
+
+class GolfBall extends Box2dObject
+{
+    constructor(pos)
+    {
+        super(pos);
+        this.color = WHITE;
+        this.outlineColor = rgb(0,0,0,.7);
+        this.lineWidth = .06;
+
+        this.addCircle(BALL_DIAMETER, vec2(), 1, .25, .1);
+        // almost no damping so the ball keeps rolling
+        this.setLinearDamping(.22);
+        this.setAngularDamping(.14);
+        this.setBullet(true);
+        this.setFixedRotation(true);  // prevent ball from rotating
+    }
+
+    beginContact(other)
+    {
+        // don't play sound when sinking into hole
+        if (other === hole)
+            return;
+
+        // play bounce sound scaled by speed
+        const speed = this.getSpeed();
+        const minSpeed = 2;  // minimum speed to play sound
+        const maxSpeed = 30;  // speed for max volume
+        
+        if (speed > minSpeed)
+        {
+            const volume = clamp((speed - minSpeed) / (maxSpeed - minSpeed), 0, 1);
+            sfxBounce.play(undefined, volume);
+        }
+    }
+}
+
+class Hole extends Box2dStaticObject
+{
+    constructor(pos)
+    {
+        super(pos);
+        this.pos = pos.copy();
+        this.color = BLACK;
+        this.outlineColor = BLACK;
+        this.lineWidth = 0;
+
+        // sensor so we can detect contacts
+        this.addCircle(HOLE_DIAMETER, vec2(), 0, 0, 0, true);
+    }
+
+    beginContact(other)
+    {
+        // only sink the golf ball, and only once
+        if (other !== ball || completeTimer.isSet())
+            return;
+
+        // require it to be slow-ish to "count" as sunk
+        if (ball.getSpeed() > 16)
+            return;
+
+        // start completion
+        completeTimer.set(1.0);
+
+        // a little suction + heavy damping
+        ball.setLinearDamping(8);
+        ball.setAngularDamping(8);
+        ball.setLinearVelocity(ball.getLinearVelocity().scale(.25));
+        ball.applyAcceleration(this.pos.subtract(ball.pos).scale(4), ball.getCenterOfMass());
+
+        sfxSink.play();
+    }
+
+    render()
+    {
+        // draw hole ring and center
+        drawCircle(this.pos, HOLE_RING_DIAMETER, rgb(0,0,0,.35));
+        drawCircle(this.pos, HOLE_DIAMETER, rgb(0,0,0,.9));
+
+        // simple flag
+        const poleTop = this.pos.add(vec2(0, 3.2));
+        drawLine(this.pos.add(vec2(0, .8)), poleTop, .12, rgb(.9,.9,.9));
+        drawPoly([
+            poleTop,
+            poleTop.add(vec2(2.1, -.6)),
+            poleTop.add(vec2(0, -1.2)),
+        ], rgb(1,.2,.2));
+    }
+}
+
+function buildHole(index)
+{
+    clearCourse();
+
+    holeIndex = mod(index, holes.length);
+    holeStrokes = 0;
+    completeTimer.unset();
+
+    const h = holes[holeIndex];
+
+    // boundaries
+    const half = COURSE_SIZE.scale(.5);
+    createWall(vec2(0,  half.y + WALL_THICKNESS/2), vec2(COURSE_SIZE.x + 2*WALL_THICKNESS, WALL_THICKNESS)); // top
+    createWall(vec2(0, -half.y - WALL_THICKNESS/2), vec2(COURSE_SIZE.x + 2*WALL_THICKNESS, WALL_THICKNESS)); // bottom
+    createWall(vec2( half.x + WALL_THICKNESS/2, 0), vec2(WALL_THICKNESS, COURSE_SIZE.y)); // right
+    createWall(vec2(-half.x - WALL_THICKNESS/2, 0), vec2(WALL_THICKNESS, COURSE_SIZE.y)); // left
+
+    // obstacles
+    for (const o of h.obstacles)
+    {
+        if (o.type === 'box')
+            createBumper(o.pos, o.size, o.angle || 0);
+        else if (o.type === 'circle')
+            createPillar(o.pos, o.diameter);
+        else if (o.type === 'moving')
+            createMovingBumper(o.pos, o.size, o.angle || 0, o.moveAxis, o.moveRange, o.moveSpeed);
+    }
+
+    // hole + ball
+    hole = new Hole(h.hole);
+    ball = new GolfBall(h.tee);
+
+    // tiny tee marker
+    const tee = addCourseObject(new EngineObject(h.tee, vec2(.8,.8)));
+    tee.color = rgb(1,1,1,.5);
+    tee.renderOrder = -1;
+    tee.update = ()=>{};
+    tee.render = function() { drawCircle(this.pos, .5, this.color); };
+}
+
+function canShoot()
+{
+    return ball && !completeTimer.isSet() && ball.getSpeed() < STOP_SPEED;
+}
+
+///////////////////////////////////////////////////////////////////////////////
+async function gameInit()
+{
+    // setup box2d first!
+    await box2dInit();
+
+    // visuals
+    canvasClearColor = rgb(.08,.12,.08);
+    setCanvasFixedSize(vec2(1280, 720));
+    cameraPos = vec2();
+    cameraScale = 32;
+
+    // sounds
+    sfxHit = new SoundGenerator({
+        volume:.9,
+        frequency:260,
+        attack:0,
+        release:.12,
+        shapeCurve:1.4,
+        slide:-2.2,
+        noise:.02,
+    });
+
+    sfxSink = new SoundGenerator({
+        volume:.8,
+        frequency:620,
+        attack:0,
+        release:.18,
+        shapeCurve:1.1,
+        slide:-3.5,
+        pitchJump:120,
+        pitchJumpTime:.06,
+        delay:.05,
+    });
+
+    sfxBounce = new SoundGenerator({
+        volume:.5,
+        frequency:150,
+        attack:0,
+        release:.08,
+        shapeCurve:1.2,
+        slide:-1.5,
+        noise:.01,
+    });
+
+    // start at menu
+    gameState = 'menu';
+    totalStrokes = 0;
+}
+
+///////////////////////////////////////////////////////////////////////////////
+function gameUpdate()
+{
+    // Number keys 1-9 to select holes (works in menu or during play)
+    for (let i = 0; i < 9; i++)
+    {
+        if (keyWasPressed('Digit' + (i + 1)))
+        {
+            gameState = 'play';
+            totalStrokes = 0;
+            buildHole(i);
+            return;
+        }
+    }
+
+    // Menu state
+    if (gameState == 'menu')
+    {
+        // Handle hole selection clicks
+        if (mouseWasPressed(0))
+        {
+            const gridSize = 3;
+            const cellW = 360;
+            const cellH = 200;
+            const startX = (mainCanvasSize.x - gridSize * cellW) / 2;
+            const startY = 100;
+            const previewScale = 8;
+            const courseW = COURSE_SIZE.x * previewScale;
+            const courseH = COURSE_SIZE.y * previewScale;
+            
+            for (let i = 0; i < 9; i++)
+            {
+                const col = i % gridSize;
+                const row = (i / gridSize) | 0;
+                const cx = startX + col * cellW + cellW/2;
+                const cy = startY + row * cellH + cellH/2;
+                
+                // Check if mouse is within the course preview area
+                if (mousePosScreen.x > cx - courseW/2 && mousePosScreen.x < cx + courseW/2 &&
+                    mousePosScreen.y > cy - courseH/2 && mousePosScreen.y < cy + courseH/2)
+                {
+                    gameState = 'play';
+                    totalStrokes = 0;
+                    buildHole(i);
+                    return;
+                }
+            }
+        }
+        return;
+    }
+
+    // reset/retry
+    if (keyWasPressed('KeyR'))
+        buildHole(holeIndex);
+
+    // next hole (debug)
+    if (keyWasPressed('KeyN'))
+        buildHole(holeIndex + 1);
+
+    // return to menu
+    if (keyWasPressed('Escape'))
+    {
+        clearCourse();
+        gameState = 'menu';
+        return;
+    }
+
+    // completion
+    if (completeTimer.elapsed())
+        buildHole(holeIndex + 1);
+
+    // aiming controls
+    if (completeTimer.isSet())
+    {
+        aiming = false;
+        return;
+    }
+
+    if (aiming)
+    {
+        if (mouseIsDown(0))
+        {
+            // aim in the direction you drag the mouse
+            aimDrag = mousePos.subtract(ball.pos);
+        }
+        else
+            aiming = false;
+
+        if (mouseWasReleased(0))
+        {
+            const drag = mousePos.subtract(ball.pos);
+            const dragLen = drag.length();
+            const power = clamp(dragLen / MAX_DRAG);
+
+            aiming = false;
+            aimDrag = vec2();
+
+            if (!canShoot() || power < .05)
+                return;
+
+            const dir = drag.normalize();
+            const impulse = dir.scale(power * SHOT_STRENGTH);
+
+            ball.applyAcceleration(impulse, ball.getCenterOfMass());
+            sfxHit.play();
+
+            holeStrokes++;
+            totalStrokes++;
+        }
+    }
+    else
+    {
+        // start aiming only if clicking near ball and ball is stopped
+        if (mouseWasPressed(0) && canShoot())
+        {
+            if (mousePos.distance(ball.pos) < 2.4)
+            {
+                aiming = true;
+                aimDrag = vec2();
+            }
+        }
+    }
+
+    // gentle clamp: if ball escaped somehow, respawn at tee
+    const half = COURSE_SIZE.scale(.5).add(vec2(6));
+    if (ball.pos.x < -half.x || ball.pos.x > half.x || ball.pos.y < -half.y || ball.pos.y > half.y)
+        buildHole(holeIndex);
+}
+
+///////////////////////////////////////////////////////////////////////////////
+function gameUpdatePost()
+{
+    // center camera
+    setCameraPos(vec2());
+    
+    // Animate moving obstacles
+    for (const m of movingObstacles)
+    {
+        m.phase += timeDelta * m.moveSpeed;
+        const offset = Math.sin(m.phase) * m.moveRange;
+        const newPos = m.basePos.copy();
+        if (m.moveAxis === 'x')
+            newPos.x += offset;
+        else
+            newPos.y += offset;
+        m.obj.setTransform(newPos, m.obj.angle);
+    }
+    
+    // Rapid slowdown when ball is moving slowly but not yet stopped
+    if (ball && !completeTimer.isSet())
+    {
+        const speed = ball.getSpeed();
+        const slowdownThreshold = STOP_SPEED * 10;  // 2.0 - starts slowing down earlier
+        if (speed > STOP_SPEED && speed < slowdownThreshold)
+        {
+            // Apply extra damping to rapidly slow down the ball
+            const vel = ball.getLinearVelocity();
+            ball.setLinearVelocity(vel.scale(0.92));  // reduce velocity each frame
+        }
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////////
+function gameRender()
+{
+    if (gameState == 'menu')
+        return;  // Don't render game world in menu
+
+    // background grass
+    drawRect(cameraPos, COURSE_SIZE.add(vec2(6)), rgb(.12,.22,.12));
+    drawRect(cameraPos, COURSE_SIZE.add(vec2(1.2)), rgb(.18,.35,.18));
+    drawRect(cameraPos, COURSE_SIZE, rgb(.14,.28,.14));
+
+    // subtle stripes
+    for (let i=-8; i<=8; i++)
+        drawRect(vec2(i*2, 0), vec2(.7, COURSE_SIZE.y), rgb(1,1,1,.03));
+
+    // tee -> hole hint line (only when stopped)
+    if (canShoot())
+        drawLine(ball.pos, hole.pos, .08, rgb(1,1,1,.12));
+}
+
+///////////////////////////////////////////////////////////////////////////////
+function gameRenderPost()
+{
+    // Menu rendering
+    if (gameState == 'menu')
+    {
+        // Title
+        drawTextScreen('MINI GOLF', vec2(mainCanvasSize.x/2, 50), 72, WHITE, 6, BLACK);
+        
+        // 3x3 grid of hole previews
+        const gridSize = 3;
+        const cellW = 360;
+        const cellH = 200;
+        const startX = (mainCanvasSize.x - gridSize * cellW) / 2;
+        const startY = 100;
+        const previewScale = 8;  // Scale for drawing preview
+        
+        for (let i = 0; i < 9; i++)
+        {
+            const col = i % gridSize;
+            const row = (i / gridSize) | 0;
+            const cx = startX + col * cellW + cellW/2;
+            const cy = startY + row * cellH + cellH/2;
+            
+            const h = holes[i];
+            
+            // Draw mini preview of course - use actual course aspect ratio
+            const courseW = COURSE_SIZE.x * previewScale;
+            const courseH = COURSE_SIZE.y * previewScale;
+            
+            // Cell background - use course aspect ratio
+            const hovered = mousePosScreen.x > cx - courseW/2 && mousePosScreen.x < cx + courseW/2 &&
+                           mousePosScreen.y > cy - courseH/2 && mousePosScreen.y < cy + courseH/2;
+            const bgColor = hovered ? rgb(.2,.35,.2) : rgb(.12,.22,.12);
+            drawRectScreenSpace(vec2(cx, cy), vec2(courseW + 6, courseH + 6), bgColor);
+            drawRectScreenSpace(vec2(cx, cy), vec2(courseW, courseH), rgb(.14,.28,.14));
+            
+            // Draw gray wall border around the course (outside the green area)
+            const wallThick = WALL_THICKNESS * previewScale;
+            const wallColor = rgb(.4,.4,.45);
+            drawRectScreenSpace(vec2(cx, cy - courseH/2 - wallThick/2), vec2(courseW + wallThick*2, wallThick), wallColor);  // top
+            drawRectScreenSpace(vec2(cx, cy + courseH/2 + wallThick/2), vec2(courseW + wallThick*2, wallThick), wallColor);  // bottom
+            drawRectScreenSpace(vec2(cx - courseW/2 - wallThick/2, cy), vec2(wallThick, courseH), wallColor);  // left
+            drawRectScreenSpace(vec2(cx + courseW/2 + wallThick/2, cy), vec2(wallThick, courseH), wallColor);  // right
+            
+            // Draw white outline when hovered
+            if (hovered)
+            {
+                const outlineThick = 5;
+                const outlineW = courseW + wallThick*2 + 4;
+                const outlineH = courseH + wallThick*2 + 4;
+                const hw = outlineW/2, hh = outlineH/2;
+                drawPoly([vec2(-hw,-hh), vec2(hw,-hh), vec2(hw,hh), vec2(-hw,hh)], 
+                    rgb(0,0,0,0), outlineThick, WHITE, vec2(cx, cy), 0, false, true);
+            }
+            
+            // Hole number
+            drawTextScreen('Hole ' + (i+1), vec2(cx, cy - courseH/2 - wallThick - 16), 28, WHITE, 3, BLACK);
+            
+            // Draw obstacles as simple shapes
+            for (const o of h.obstacles)
+            {
+                const ox = cx + o.pos.x * previewScale;
+                const oy = cy - o.pos.y * previewScale;  // flip Y
+                
+                if (o.type === 'box')
+                {
+                    const w = o.size.x * previewScale;
+                    const hh = o.size.y * previewScale;
+                    const angle = o.angle || 0;
+                    drawRotatedRectScreenSpace(vec2(ox, oy), vec2(w, hh), angle, rgb(.5,.4,.2));
+                }
+                else if (o.type === 'circle')
+                {
+                    const r = o.diameter * previewScale / 2;
+                    drawCircleScreenSpace(vec2(ox, oy), r, rgb(.45,.45,.5));
+                }
+                else if (o.type === 'moving')
+                {
+                    const w = o.size.x * previewScale;
+                    const hh = o.size.y * previewScale;
+                    const angle = o.angle || 0;
+                    drawRotatedRectScreenSpace(vec2(ox, oy), vec2(w, hh), angle, rgb(.7,.3,.3));
+                }
+            }
+            
+            // Tee position (white circle for ball)
+            const tx = cx + h.tee.x * previewScale;
+            const ty = cy - h.tee.y * previewScale;
+            drawCircleScreenSpace(vec2(tx, ty), 5, WHITE);
+            
+            // Hole position (black circle with ring)
+            const hx = cx + h.hole.x * previewScale;
+            const hy = cy - h.hole.y * previewScale;
+            drawCircleScreenSpace(vec2(hx, hy), 7, rgb(0,0,0,.5));
+            drawCircleScreenSpace(vec2(hx, hy), 5, BLACK);
+        }
+        
+        return;
+    }
+
+    // aim UI
+    if (aiming && canShoot())
+    {
+        const drag = mousePos.subtract(ball.pos);
+        const dragLen = drag.length();
+        const power = clamp(dragLen / MAX_DRAG);
+
+        const dir = dragLen ? drag.scale(1/dragLen) : vec2(1,0);
+        const tip = ball.pos.add(dir.scale(6*power));
+        const headLen = 1.1;
+        const headWid = .7;
+        const base = tip.subtract(dir.scale(headLen));
+        const perp = vec2(-dir.y, dir.x);
+
+        // shaft stops at the base of the triangle head (avoids a "Y" look)
+        drawLine(ball.pos, base, .18, rgb(1,1,1,.7));
+
+        // pointed triangle arrow head
+        const p1 = base.add(perp.scale(headWid*.5));
+        const p2 = base.subtract(perp.scale(headWid*.5));
+        drawPoly([tip, p1, p2], rgb(1,1,1,.7));
+
+        // power text
+        drawTextScreen(`Power ${(power*100|0)}%`, vec2(mainCanvasSize.x/2, mainCanvasSize.y-36), 36, WHITE, 4, BLACK);
+    }
+
+    // completion text
+    if (completeTimer.isSet())
+    {
+        drawTextScreen('SUNK!', vec2(mainCanvasSize.x/2, mainCanvasSize.y/2), 120, rgb(1,1,1,.95), 8, rgb(0,0,0,.7));
+    }
+
+    // hud
+    const hud = `Hole ${holeIndex+1}/${holes.length}   Strokes: ${holeStrokes}   Total: ${totalStrokes}\n` +
+        `Drag from the ball to aim + shoot.  R = Retry, N = Next hole`;
+    drawTextScreen(hud, vec2(mainCanvasSize.x/2, 52), 36, WHITE, 4, rgb(0,0,0,.6));
+}
+
+///////////////////////////////////////////////////////////////////////////////
+// Startup LittleJS Engine
+engineInit(gameInit, gameUpdate, gameUpdatePost, gameRender, gameRenderPost);
+
+</script>
+<script>(function(){const G='miniGolf';window.addEventListener('beforeunload',()=>{if(typeof totalStrokes!=='undefined'&&totalStrokes>0)try{parent.postMessage({type:'arcade-score',game:G,score:totalStrokes},'*')}catch(e){}})})();</script>

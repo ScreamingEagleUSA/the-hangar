@@ -1,0 +1,617 @@
+<!DOCTYPE html><head>
+<title>LittleJS AI Starter Project</title>
+<meta charset="utf-8">
+</head><body style="background:#000">
+<script src="engine/littlejs.min.js"></script>
+<script>
+'use strict';
+
+// engine settings, do not remove
+debugWatermark = false;
+showEngineVersion = false;
+paused = false;
+
+gravity = vec2(0, 0);
+cameraPos = vec2(0, 0);
+cameraScale = 32;
+
+// AI can use this class to make sound effects
+class SoundGenerator extends Sound
+{
+    constructor(params = {})
+    {
+        const {
+            volume = 1,
+            randomness = .05,
+            frequency = 220,
+            attack = 0,
+            release = .1,
+            shapeCurve = 1,
+            slide = 0,
+            pitchJump = 0,
+            pitchJumpTime = 0,
+            repeatTime = 0,
+            noise = 0,
+            bitCrush = 0,
+            delay = 0,
+        } = params;
+
+        super([volume, randomness, frequency, attack, 0, release, 0, shapeCurve, slide, 0,
+            pitchJump, pitchJumpTime, repeatTime, noise, 0, bitCrush, delay, 1, 0, 0, 0]);
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////////
+// Breakout + Predictable Special Powerup Bricks
+
+// world size
+const levelSize = vec2(38, 20);
+
+// tuning
+const SPECIAL_BRICKS_PER_LEVEL = 8; // only these drop powerups
+const PADDLE_BASE = vec2(6, .7);
+const PADDLE_WIDEN_STEP = 1;
+const PADDLE_WIDEN_MAX = 12;
+
+const STICKY_DURATION = 10;
+const LASER_DURATION = 10;
+
+// game state
+let paddlePos, paddleSize;
+let paddleExtra = 0; // extra width from W powerup
+
+let balls = [];      // {pos, vel, size, stuck, stuckOffsetX}
+let bullets = [];    // {pos, vel, size}
+let bricks = [];     // {pos, size, color, alive, special, dropType}
+let powerups = [];   // {pos, vel, size, type}
+
+let ballSpeed;
+let score = 0;
+let lives = 3;
+let state = 'serve'; // serve | win | lose (otherwise playing)
+
+let stickyTimer = 0;
+let laserTimer = 0;
+let laserCooldown = 0;
+
+// sounds
+let sfxBounce, sfxBrick, sfxLose, sfxWin, sfxPower, sfxLaser;
+
+// helpers
+const playSound = (s) => { try { s && s.play(); } catch(e) {} };
+const clampToLevelX = (x, halfWidth) => clamp(x, halfWidth, levelSize.x - halfWidth);
+const aabbOverlap = (posA, sizeA, posB, sizeB) =>
+    abs(posA.x - posB.x) < (sizeA.x + sizeB.x) / 2 &&
+    abs(posA.y - posB.y) < (sizeA.y + sizeB.y) / 2;
+
+function applyPaddleWidth()
+{
+    const w = clamp(PADDLE_BASE.x + paddleExtra, PADDLE_BASE.x, PADDLE_WIDEN_MAX);
+    paddleSize = vec2(w, PADDLE_BASE.y);
+}
+
+function makeBall(pos, vel, size = .8)
+{
+    return { pos: pos.copy(), vel: vel.copy(), size, stuck: false, stuckOffsetX: 0 };
+}
+
+function anyStuckBalls()
+{
+    for (const b of balls)
+        if (b.stuck) return true;
+    return false;
+}
+
+function releaseStuckBalls()
+{
+    for (const b of balls)
+    {
+        if (!b.stuck) continue;
+        b.stuck = false;
+
+        // release direction based on where it stuck
+        const offset = b.stuckOffsetX / (paddleSize.x / 2);
+        const x = clamp(offset, -1, 1);
+        b.vel = vec2(x * 1.2, 1).normalize(ballSpeed);
+    }
+}
+
+function fireLaser()
+{
+    if (laserTimer <= 0 || laserCooldown > 0)
+        return;
+
+    const y = paddlePos.y + paddleSize.y / 2 + .25;
+    const x1 = paddlePos.x - paddleSize.x / 2 + .35;
+    const x2 = paddlePos.x + paddleSize.x / 2 - .35;
+    const v = vec2(0, 26);
+
+    bullets.push({ pos: vec2(x1, y), vel: v, size: vec2(.22, .7) });
+    bullets.push({ pos: vec2(x2, y), vel: v, size: vec2(.22, .7) });
+
+    laserCooldown = .14;
+    playSound(sfxLaser);
+}
+
+// Resolve ball (AABB) vs rect (AABB). Mutates ball pos/vel.
+function resolveBallRect(ball, rectPos, rectSize)
+{
+    if (!aabbOverlap(ball.pos, vec2(ball.size), rectPos, rectSize))
+        return;
+
+    const halfB = ball.size / 2;
+    const dx = ball.pos.x - rectPos.x;
+    const dy = ball.pos.y - rectPos.y;
+    const px = (rectSize.x / 2 + halfB) - abs(dx);
+    const py = (rectSize.y / 2 + halfB) - abs(dy);
+
+    if (px < py)
+    {
+        const sx = sign(dx) || 1;
+        ball.pos.x += px * sx;
+        ball.vel.x = abs(ball.vel.x) * sx;
+    }
+    else
+    {
+        const sy = sign(dy) || 1;
+        ball.pos.y += py * sy;
+        ball.vel.y = abs(ball.vel.y) * sy;
+    }
+}
+
+function powerupColor(type)
+{
+    return type === 'W' ? hsl(.58, .9, .6) :
+           type === 'M' ? hsl(.32, .9, .6) :
+           type === 'T' ? hsl(.12, .9, .62) :
+                          hsl(0, .9, .65);
+}
+
+function drawPowerLetter(pos, type, scale = 1)
+{
+    const size = .8 * scale;
+    const lineWidth = .25; // hairline outline
+    drawText(type, pos, size, hsl(0, 0, 1), lineWidth, hsl(0, 0, 0), 'center');
+}
+
+function resetPaddle()
+{
+    paddleExtra = 0;
+    applyPaddleWidth();
+    paddlePos = vec2(levelSize.x / 2, 1.2);
+}
+
+function resetBall()
+{
+    balls.length = 0;
+    bullets.length = 0;
+
+    ballSpeed = 18;
+    const size = .8;
+    const pos = paddlePos.add(vec2(0, paddleSize.y / 2 + size / 2 + .2));
+    balls.push(makeBall(pos, vec2(0, 0), size));
+
+    state = 'serve';
+}
+
+function launchBall()
+{
+    const angle = rand(.25, .75) * PI; // 45..135 degrees
+    balls[0].vel = vec2(Math.cos(angle), Math.sin(angle)).normalize(ballSpeed);
+}
+
+function resetBricks()
+{
+    bricks.length = 0;
+
+    const brickSize = vec2(2, 1);
+    for (let y = 12; y <= levelSize.y - 2; y += 1)
+    for (let x = 2;  x <= levelSize.x - 2; x += 2)
+    {
+        const t = percent(y, 12, levelSize.y - 2);
+        const color = hsl(lerp(.55, .05, t), .9, .6);
+        bricks.push({ pos: vec2(x, y), size: brickSize, color, alive: true, special: false, dropType: '' });
+    }
+
+    // pick special bricks and ASSIGN their drop in advance
+    const n = min(SPECIAL_BRICKS_PER_LEVEL, bricks.length);
+    const idx = [];
+    for (let i = 0; i < bricks.length; ++i) idx.push(i);
+
+    for (let i = idx.length - 1; i > 0; --i)
+    {
+        const j = (Math.random() * (i + 1)) | 0;
+        const t = idx[i]; idx[i] = idx[j]; idx[j] = t;
+    }
+
+    for (let k = 0; k < n; ++k)
+    {
+        const b = bricks[idx[k]];
+        b.special = true;
+
+        // Weighted drops: W common, M medium, T less, L rare
+        const r = Math.random();
+        b.dropType = r < .45 ? 'W' : r < .75 ? 'M' : r < .92 ? 'T' : 'L';
+    }
+}
+
+function spawnPowerupFromBrick(brick)
+{
+    if (!brick.special || !brick.dropType)
+        return;
+
+    powerups.push({
+        pos: brick.pos.copy(),
+        vel: vec2(0, -7),
+        size: vec2(1.2, .8),
+        type: brick.dropType,
+    });
+}
+
+function applyPowerup(type)
+{
+    playSound(sfxPower);
+
+    if (type === 'W')
+    {
+        paddleExtra = min(paddleExtra + PADDLE_WIDEN_STEP, PADDLE_WIDEN_MAX - PADDLE_BASE.x);
+        applyPaddleWidth();
+    }
+    else if (type === 'M')
+    {
+        if (!balls.length)
+            return;
+
+        const src = balls[balls.length - 1];
+        const baseDir = src.vel.length() ? src.vel.normalize() : vec2(0, 1);
+        const a = baseDir.angle();
+        balls.push(makeBall(src.pos, vec2(Math.cos(a + .35), Math.sin(a + .35)).normalize(ballSpeed), src.size));
+        balls.push(makeBall(src.pos, vec2(Math.cos(a - .35), Math.sin(a - .35)).normalize(ballSpeed), src.size));
+    }
+    else if (type === 'T')
+    {
+        stickyTimer = STICKY_DURATION;
+    }
+    else if (type === 'L')
+    {
+        laserTimer = LASER_DURATION;
+        laserCooldown = 0;
+    }
+}
+
+function resetRunState()
+{
+    powerups.length = 0;
+    bullets.length = 0;
+    stickyTimer = 0;
+    laserTimer = 0;
+    laserCooldown = 0;
+}
+
+function resetGame()
+{
+    score = 0;
+    lives = 3;
+    state = 'serve';
+
+    resetPaddle();
+    resetRunState();
+    resetBricks();
+    resetBall();
+}
+
+///////////////////////////////////////////////////////////////////////////////
+async function gameInit()
+{
+    setCanvasFixedSize(vec2(1280, 720));
+    cameraPos = levelSize.scale(.5);
+
+    sfxBounce = new SoundGenerator({ volume: .6, frequency: 400, release: .06, shapeCurve: 1.6 });
+    sfxBrick  = new SoundGenerator({ volume: .7, frequency: 620, release: .08, slide: -1.2, shapeCurve: 1.2 });
+    sfxLose   = new SoundGenerator({ volume: .8, frequency: 180, release: .25, slide: -1.0, noise: .1 });
+    sfxWin    = new SoundGenerator({ volume: .8, frequency: 520, release: .35, slide: .6, pitchJump: 220, pitchJumpTime: .08 });
+    sfxPower  = new SoundGenerator({ volume: .75, frequency: 740, release: .12, pitchJump: 260, pitchJumpTime: .03, shapeCurve: 1.1 });
+    sfxLaser  = new SoundGenerator({ volume: .55, frequency: 980, release: .06, slide: 1.5, shapeCurve: 1.8 });
+
+    resetGame();
+}
+
+///////////////////////////////////////////////////////////////////////////////
+function gameUpdate()
+{
+    const dt = timeDelta;
+
+    if (keyWasPressed('KeyR'))
+        resetGame();
+
+    // paddle controls (keyboard overrides mouse)
+    const left  = keyIsDown('ArrowLeft') || keyIsDown('KeyA');
+    const right = keyIsDown('ArrowRight') || keyIsDown('KeyD');
+    const dir = (right ? 1 : 0) - (left ? 1 : 0);
+
+    if (dir)
+        paddlePos.x += dir * 24 * dt;
+    else
+        paddlePos.x = mousePos.x;
+
+    paddlePos.x = clampToLevelX(paddlePos.x, paddleSize.x / 2);
+
+    // timers
+    if (stickyTimer > 0) stickyTimer = max(0, stickyTimer - dt);
+    if (laserTimer  > 0) laserTimer  = max(0, laserTimer  - dt);
+    if (laserCooldown > 0) laserCooldown = max(0, laserCooldown - dt);
+
+    // serve state keeps ball attached to paddle
+    if (state === 'serve')
+    {
+        const b = balls[0];
+        b.pos = paddlePos.add(vec2(0, paddleSize.y / 2 + b.size / 2 + .2));
+        if (mouseWasPressed(0) || keyWasPressed('Space') || keyWasPressed('Enter'))
+        {
+            launchBall();
+            state = 'play';
+        }
+        return;
+    }
+
+    if (state === 'win' || state === 'lose')
+        return;
+
+    // action: if any stuck, release first; otherwise fire laser
+    const actionPressed = mouseWasPressed(0) || keyWasPressed('Space') || keyWasPressed('Enter');
+    if (actionPressed && anyStuckBalls())
+        releaseStuckBalls();
+    else if (actionPressed)
+        fireLaser();
+
+    updatePowerups(dt);
+    updateBullets(dt);
+    updateBalls(dt);
+
+    // win check
+    for (const b of bricks)
+        if (b.alive)
+            return;
+
+    state = 'win';
+    playSound(sfxWin);
+}
+
+function updatePowerups(dt)
+{
+    for (let i = powerups.length; i--;)
+    {
+        const p = powerups[i];
+        p.pos = p.pos.add(p.vel.scale(dt));
+
+        if (p.pos.y < -2)
+        {
+            powerups.splice(i, 1);
+            continue;
+        }
+
+        if (aabbOverlap(p.pos, p.size, paddlePos, paddleSize))
+        {
+            applyPowerup(p.type);
+            powerups.splice(i, 1);
+        }
+    }
+}
+
+function updateBullets(dt)
+{
+    for (let i = bullets.length; i--;)
+    {
+        const s = bullets[i];
+        s.pos = s.pos.add(s.vel.scale(dt));
+
+        if (s.pos.y > levelSize.y + 2)
+        {
+            bullets.splice(i, 1);
+            continue;
+        }
+
+        for (const b of bricks)
+        {
+            if (!b.alive) continue;
+            if (!aabbOverlap(s.pos, s.size, b.pos, b.size))
+                continue;
+
+            b.alive = false;
+            score += 100;
+            playSound(sfxBrick);
+            spawnPowerupFromBrick(b);
+
+            bullets.splice(i, 1);
+            break;
+        }
+    }
+}
+
+function updateBalls(dt)
+{
+    for (const ball of balls)
+    {
+        // stuck balls ride the paddle
+        if (ball.stuck)
+        {
+            ball.pos.x = clampToLevelX(paddlePos.x + ball.stuckOffsetX, ball.size / 2);
+            ball.pos.y = paddlePos.y + paddleSize.y / 2 + ball.size / 2 + .001;
+            continue;
+        }
+
+        ball.pos = ball.pos.add(ball.vel.scale(dt));
+        const r = ball.size / 2;
+
+        // walls
+        if (ball.pos.x - r < 0) { ball.pos.x = r; ball.vel.x = abs(ball.vel.x); playSound(sfxBounce); }
+        else if (ball.pos.x + r > levelSize.x) { ball.pos.x = levelSize.x - r; ball.vel.x = -abs(ball.vel.x); playSound(sfxBounce); }
+        if (ball.pos.y + r > levelSize.y) { ball.pos.y = levelSize.y - r; ball.vel.y = -abs(ball.vel.y); playSound(sfxBounce); }
+
+        // paddle (only if moving down)
+        if (ball.vel.y < 0 && aabbOverlap(ball.pos, vec2(ball.size), paddlePos, paddleSize))
+        {
+            if (stickyTimer > 0)
+            {
+                ball.stuck = true;
+                ball.stuckOffsetX = clamp(ball.pos.x - paddlePos.x, -paddleSize.x / 2 + r, paddleSize.x / 2 - r);
+                ball.vel = vec2(0, 0);
+                ball.pos.y = paddlePos.y + paddleSize.y / 2 + r + .001;
+                playSound(sfxBounce);
+            }
+            else
+            {
+                ball.pos.y = paddlePos.y + paddleSize.y / 2 + r + .001;
+                const offset = (ball.pos.x - paddlePos.x) / (paddleSize.x / 2);
+                const x = clamp(offset, -1, 1);
+                ball.vel = vec2(x * 1.2, 1).normalize(ballSpeed);
+                playSound(sfxBounce);
+            }
+        }
+
+        // bricks (one hit per ball per frame)
+        for (const b of bricks)
+        {
+            if (!b.alive) continue;
+            if (!aabbOverlap(ball.pos, vec2(ball.size), b.pos, b.size))
+                continue;
+
+            resolveBallRect(ball, b.pos, b.size);
+            b.alive = false;
+            score += 100;
+            playSound(sfxBrick);
+            spawnPowerupFromBrick(b);
+            ball.vel = ball.vel.normalize(ballSpeed);
+            break;
+        }
+    }
+
+    // remove balls that fell out
+    for (let i = balls.length; i--;)
+        if (!balls[i].stuck && balls[i].pos.y + balls[i].size / 2 < 0)
+            balls.splice(i, 1);
+
+    // lose life if no balls remain
+    if (!balls.length)
+    {
+        lives--;
+        playSound(sfxLose);
+
+        if (lives <= 0)
+        {
+            state = 'lose';
+            return;
+        }
+
+        // death resets paddle size + temporary powers
+        paddleExtra = 0;
+        applyPaddleWidth();
+        resetRunState();
+        resetBall();
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////////
+function gameUpdatePost()
+{
+    cameraPos = levelSize.scale(.5);
+    const fit = min(mainCanvasSize.x / levelSize.x, mainCanvasSize.y / levelSize.y);
+    cameraScale = fit * .95;
+}
+
+///////////////////////////////////////////////////////////////////////////////
+function gameRender()
+{
+    // background
+    drawRect(cameraPos, levelSize.scale(3), rgb(.05, .05, .07));
+    drawRect(cameraPos, levelSize, rgb(.08, .08, .11));
+
+    // bricks
+    for (const b of bricks)
+    {
+        if (!b.alive) continue;
+
+        if (b.special)
+        {
+            const frame = powerupColor(b.dropType);
+            drawRect(b.pos, b.size.subtract(vec2(.02, .02)), frame);
+            drawRect(b.pos, b.size.subtract(vec2(.18, .18)), b.color);
+            drawPowerLetter(b.pos, b.dropType);
+        }
+        else
+            drawRect(b.pos, b.size.subtract(vec2(.08, .08)), b.color);
+    }
+
+    // powerups
+    for (const p of powerups)
+    {
+        drawRect(p.pos, p.size, powerupColor(p.type));
+        drawPowerLetter(p.pos, p.type);
+    }
+
+    // bullets
+    for (const s of bullets)
+        drawRect(s.pos, s.size, hsl(0, 0, 1));
+
+    // paddle
+    const paddleCol = stickyTimer > 0 ? hsl(.12, .75, .75) : laserTimer > 0 ? hsl(0, .75, .72) : hsl(0, 0, .95);
+    drawRect(paddlePos, paddleSize, paddleCol);
+
+    // balls
+    for (const b of balls)
+        drawCircle(b.pos, b.size, hsl(.12, .9, .6));
+}
+
+///////////////////////////////////////////////////////////////////////////////
+function gameRenderPost()
+{
+    drawTextScreen(`Score ${score}`, vec2(16, 16), 28, hsl(0, 0, 1), 4, hsl(0, 0, 0), 'left');
+    drawTextScreen(`Lives ${lives}`, vec2(mainCanvasSize.x - 16, 16), 28, hsl(0, 0, 1), 4, hsl(0, 0, 0), 'right');
+
+    let status = '';
+    if (paddleExtra > 0) status += `WIDE +${paddleExtra.toFixed(0)}   `;
+    if (stickyTimer > 0) status += `STICKY ${stickyTimer.toFixed(0)}s   `;
+    if (laserTimer  > 0) status += `LASER ${laserTimer.toFixed(0)}s   `;
+    if (balls.length > 1) status += `BALLS ${balls.length}`;
+    if (status)
+        drawTextScreen(status, vec2(mainCanvasSize.x / 2, 16), 22, hsl(0, 0, .95), 4, hsl(0, 0, 0));
+
+    if (state === 'serve')
+    {
+        drawTextScreen(`Click or Space to launch`, vec2(mainCanvasSize.x / 2, mainCanvasSize.y - 70), 36,
+            hsl(0, 0, 1), 6, hsl(0, 0, 0));
+        drawTextScreen(`Move: Mouse or A/D · Restart: R`, vec2(mainCanvasSize.x / 2, mainCanvasSize.y - 32), 22,
+            hsl(0, 0, .9), 4, hsl(0, 0, 0));
+    }
+    else if (state === 'win')
+    {
+        drawTextScreen(`YOU WIN!`, vec2(mainCanvasSize.x / 2, mainCanvasSize.y / 2 + 20), 90,
+            hsl(.32, .8, .6), 10, hsl(0, 0, 0));
+        drawTextScreen(`Press R to play again`, vec2(mainCanvasSize.x / 2, mainCanvasSize.y / 2 - 50), 32,
+            hsl(0, 0, 1), 6, hsl(0, 0, 0));
+    }
+    else if (state === 'lose')
+    {
+        drawTextScreen(`GAME OVER`, vec2(mainCanvasSize.x / 2, mainCanvasSize.y / 2 + 20), 90,
+            hsl(0, 1, .6), 10, hsl(0, 0, 0));
+        drawTextScreen(`Press R to try again`, vec2(mainCanvasSize.x / 2, mainCanvasSize.y / 2 - 50), 32,
+            hsl(0, 0, 1), 6, hsl(0, 0, 0));
+    }
+
+    drawTextScreen(`Special bricks show their drop (W=Wide, M=Multi, T=Sticky, L=Laser)`,
+        vec2(mainCanvasSize.x / 2, mainCanvasSize.y - 18), 18, hsl(0, 0, .8), 4, hsl(0, 0, 0));
+
+    if (laserTimer > 0)
+        drawTextScreen(`Laser: Click/Space to shoot`, vec2(mainCanvasSize.x / 2, mainCanvasSize.y - 40), 18,
+            hsl(0, 0, .9), 4, hsl(0, 0, 0));
+
+    if (stickyTimer > 0)
+        drawTextScreen(`Sticky: balls stick to paddle · Click/Space to release`, vec2(mainCanvasSize.x / 2, mainCanvasSize.y - 58), 18,
+            hsl(0, 0, .9), 4, hsl(0, 0, 0));
+}
+
+///////////////////////////////////////////////////////////////////////////////
+engineInit(gameInit, gameUpdate, gameUpdatePost, gameRender, gameRenderPost);
+
+</script>
+<script>(function(){const G='breakout';let r=false;setInterval(()=>{if(typeof state!=='undefined'&&state==='lose'&&!r&&typeof score!=='undefined'&&score>0){r=true;try{parent.postMessage({type:'arcade-score',game:G,score:score},'*')}catch(e){}}if(typeof state!=='undefined'&&state!=='lose')r=false},500)})();</script>
