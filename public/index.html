@@ -51,33 +51,6 @@
     <section class="rooms-section">
       <h2 class="section-title">Multiplayer Game Rooms</h2>
       <div id="roomsGrid" class="rooms-grid"></div>
-      <h2 class="section-title" style="margin-top:20px">Solo Games</h2>
-      <div class="rooms-grid">
-        <div class="room-card solo-card" id="towerCard">
-          <div class="room-card-header">
-            <span class="room-card-name">Tower of Words</span>
-            <span class="room-card-type" style="background:rgba(74,222,128,.1);color:var(--green)">🗼 Solo</span>
-          </div>
-          <p style="font-size:.8rem;color:var(--text-secondary);margin:8px 0">Build a word tower! Each word starts with the last letter of the previous.</p>
-          <button class="room-join-btn" id="towerPlayBtn">Play</button>
-        </div>
-        <div class="room-card solo-card" id="magic8Card">
-          <div class="room-card-header">
-            <span class="room-card-name">Magic 8 Ball</span>
-            <span class="room-card-type" style="background:rgba(167,139,250,.1);color:var(--purple)">🎱 Solo</span>
-          </div>
-          <p style="font-size:.8rem;color:var(--text-secondary);margin:8px 0">Ask a question, shake the ball, and receive wisdom from beyond.</p>
-          <button class="room-join-btn" id="magic8Btn">Play</button>
-        </div>
-        <div class="room-card solo-card" id="reactionCard">
-          <div class="room-card-header">
-            <span class="room-card-name">Reaction Timer</span>
-            <span class="room-card-type" style="background:rgba(251,191,36,.1);color:var(--amber)">⚡ Solo</span>
-          </div>
-          <p style="font-size:.8rem;color:var(--text-secondary);margin:8px 0">Test your reflexes! Tap as fast as you can when the screen turns green.</p>
-          <button class="room-join-btn" id="reactionBtn">Play</button>
-        </div>
-      </div>
       <h2 class="section-title" style="margin-top:20px">Arcade</h2>
       <div id="arcadeGrid" class="rooms-grid"></div>
     </section>
@@ -182,7 +155,6 @@
       <button class="tab" data-game="secrethitler">Secret Hitler</button>
       <button class="tab" data-game="liarsdice">Liar's Dice</button>
       <button class="tab" data-game="tictactoe">Tic-Tac-Toe</button>
-      <button class="tab" data-game="trivia">Trivia</button>
     </div>
     <div class="modal-body rules-body" id="rulesBody"></div>
   </div>
@@ -228,11 +200,6 @@
             <span class="game-icon">❌⭕</span>
             <span class="game-name">Tic-Tac-Toe</span>
             <span class="game-players">2 players</span>
-          </button>
-          <button class="game-option" data-gt="6">
-            <span class="game-icon">🧠</span>
-            <span class="game-name">Trivia</span>
-            <span class="game-players">2-8 players</span>
           </button>
         </div>
       </div>

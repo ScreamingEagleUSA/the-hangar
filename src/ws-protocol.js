@@ -65,7 +65,7 @@ async function handleMessage(clientId, data) {
   else if (type === 'createRoom') {
     const name = msg.n;
     const gt = msg.gt || 0;
-    if (!name || gt === 0 || gt > 6) {
+    if (!name || gt === 0 || gt > 5) {
       Lobby.sendToClient(clientId, JSON.stringify({ t: 'err', m: 'Invalid room params' }));
       return;
     }

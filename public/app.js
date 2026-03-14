@@ -8,9 +8,9 @@ let currentRoom = -1;
 let rooms = [];
 let gameState = null;
 let selectedGameType = 1;
-const GAME_NAMES = ['', 'Mafia', 'Spyfall', 'Secret Hitler', "Liar's Dice", 'Tic-Tac-Toe', 'Trivia'];
-const GAME_ICONS = ['', '🐺', '🕵️', '🏛️', '🎲', '❌⭕', '🧠'];
-const GAME_CLASSES = ['', 'mafia', 'spyfall', 'secrethitler', 'liarsdice', 'tictactoe', 'trivia'];
+const GAME_NAMES = ['', 'Mafia', 'Spyfall', 'Secret Hitler', "Liar's Dice", 'Tic-Tac-Toe'];
+const GAME_ICONS = ['', '🐺', '🕵️', '🏛️', '🎲', '❌⭕'];
+const GAME_CLASSES = ['', 'mafia', 'spyfall', 'secrethitler', 'liarsdice', 'tictactoe'];
 const DICE_FACES = ['', '⚀', '⚁', '⚂', '⚃', '⚄', '⚅'];
 const PHASE_NAMES = ['Waiting', 'Roles', 'Discussion', 'Night', 'Action', 'Voting', 'Result', 'Game Over'];
 const MAFIA_ROLES = ['Villager', 'Mafia', 'Doctor', 'Detective'];
@@ -497,8 +497,6 @@ function renderGame() {
       renderLiarsDice(content, gs);
     } else if (gs.gt === 5) {
       renderTicTacToe(content, gs);
-    } else if (gs.gt === 6) {
-      renderTrivia(content, gs);
     } else {
       switch (gs.ph) {
         case 1: renderRoleReveal(content, gs); break;
@@ -1133,68 +1131,6 @@ function renderTicTacToe(el, gs) {
   el.innerHTML = html;
 }
 
-// ── Trivia Rendering ─────────────────────────────────────────────
-function renderTrivia(el, gs) {
-  const myIdx = gs.pl ? gs.pl.findIndex(p => p.u === username) : -1;
-  let html = '<div class="game-card trivia-card">';
-
-  if (gs.ph === 4) { // ACTION
-    html += `<div class="trivia-header">Question ${gs.qIdx + 1} / ${gs.qTotal}</div>`;
-    html += '<div class="trivia-scores">';
-    gs.pl.forEach((p, i) => {
-      html += `<div class="trivia-player-score${p.answered ? ' answered' : ''}">${avatarHTML(p.u, 22)}<span>${esc(p.u)}</span><span class="trivia-pts">${gs.scores[i]}</span></div>`;
-    });
-    html += '</div>';
-
-    if (gs.subPh === 'question') {
-      html += timerRingHTML(gs.elapsed, gs.tl);
-      html += `<h2 class="trivia-question">${esc(gs.question)}</h2>`;
-      html += '<div class="trivia-options">';
-      const letters = ['A', 'B', 'C', 'D'];
-      gs.options.forEach((opt, i) => {
-        const myPick = gs.myAnswer === i;
-        const disabled = gs.myAnswer !== undefined && gs.myAnswer !== -1;
-        html += `<button class="trivia-opt${myPick ? ' selected' : ''}${disabled ? ' locked' : ''}" ${disabled ? 'disabled' : `onclick="gameAction('answer',{choice:${i}})"`}><span class="trivia-letter">${letters[i]}</span>${esc(opt)}</button>`;
-      });
-      html += '</div>';
-      const answeredCount = gs.pl.filter(p => p.answered).length;
-      html += `<div class="trivia-status">${answeredCount}/${gs.pl.length} answered</div>`;
-    } else {
-      // result sub-phase
-      html += `<h2 class="trivia-question">${esc(gs.question)}</h2>`;
-      html += '<div class="trivia-options">';
-      const letters = ['A', 'B', 'C', 'D'];
-      gs.options.forEach((opt, i) => {
-        const isCorrect = i === gs.correct;
-        const cls = isCorrect ? ' correct' : (gs.answers && myIdx >= 0 && gs.answers[myIdx] === i && !isCorrect) ? ' wrong' : '';
-        html += `<button class="trivia-opt${cls} locked" disabled><span class="trivia-letter">${letters[i]}</span>${esc(opt)}</button>`;
-      });
-      html += '</div>';
-      html += timerRingHTML(gs.elapsed, gs.tl);
-    }
-  } else if (gs.ph === 7) { // GAME OVER
-    const maxScore = Math.max(...gs.scores);
-    const iWon = myIdx >= 0 && gs.scores[myIdx] === maxScore;
-    html = `<div class="game-card trivia-card game-over-card ${iWon ? 'win' : 'lose'}">`;
-    html += `<h2>${iWon ? '🎉 Victory!' : '😔 Nice Try!'}</h2>`;
-    html += '<div class="trivia-final-scores">';
-    const sorted = gs.pl.map((p, i) => ({ u: p.u, s: gs.scores[i] })).sort((a, b) => b.s - a.s);
-    sorted.forEach((p, rank) => {
-      const medal = rank === 0 ? '🥇' : rank === 1 ? '🥈' : rank === 2 ? '🥉' : `${rank + 1}.`;
-      html += `<div class="trivia-final-row${p.u === username ? ' me' : ''}">${medal} ${avatarHTML(p.u, 24)} <strong>${esc(p.u)}</strong> <span class="trivia-pts">${p.s} pts</span></div>`;
-    });
-    html += '</div>';
-    html += '<div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin-top:16px">';
-    html += '<button class="btn-primary" onclick="requestRematch()">Play Again</button>';
-    html += '<button class="btn-secondary" onclick="backToLobby()">Back to Lobby</button>';
-    html += '</div>';
-    if (iWon) { setTimeout(spawnConfetti, 100); SFX.win(); } else { SFX.lose(); }
-  }
-
-  html += '</div>';
-  el.innerHTML = html;
-}
-
 window.setBidQty = function(q) {
   ldBidQty = q;
   if (gameState && gameState.gs) renderLiarsDice($('#gameContent'), gameState.gs);
@@ -1281,6 +1217,9 @@ const ARCADE_GAMES = [
   { id:'othello',    name:'Othello',         icon:'⚫', cat:'Puzzle',   desc:'Flip your opponent\'s pieces to dominate',        path:'/games/othello.html',         hasScore:true },
   { id:'lunarLander',name:'Lunar Lander',    icon:'🌙', cat:'Action',   desc:'Land your spacecraft safely on the moon',         path:'/games/lunarLander.html',     hasScore:true },
   { id:'miniGolf',   name:'Mini Golf',       icon:'⛳', cat:'Action',   desc:'Putt your way through tricky courses',            path:'/games/miniGolf.html',        hasScore:true },
+  { id:'towerOfWords',name:'Tower of Words', icon:'🗼', cat:'Quick Play',desc:'Build a word tower — each word starts with the last letter',  view:'tower', hasScore:true },
+  { id:'reactionTimer',name:'Reaction Timer',icon:'⚡', cat:'Quick Play',desc:'Test your reflexes — tap when the screen turns green',       view:'reaction', hasScore:true },
+  { id:'magic8ball', name:'Magic 8 Ball',    icon:'🎱', cat:'Quick Play',desc:'Ask a question, shake the ball, receive wisdom',             view:'magic8', hasScore:false },
   { id:'whacAMole',  name:'Whac-A-Mole',    icon:'🔨', cat:'Quick Play',desc:'Whack moles as fast as you can',                 path:'/games/whacAMole.html',       hasScore:true },
   { id:'simonSays',  name:'Simon Says',      icon:'🧠', cat:'Quick Play',desc:'Repeat the growing color pattern',               path:'/games/simonSays.html',       hasScore:true },
   { id:'colorMatch', name:'Color Match',     icon:'🎨', cat:'Quick Play',desc:'Pick the display color, not the word',           path:'/games/colorMatch.html',      hasScore:true },
@@ -1311,6 +1250,13 @@ function renderArcadeGrid() {
 window.launchArcadeGame = function(id) {
   const g = ARCADE_GAMES.find(x => x.id === id);
   if (!g) return;
+  if (g.view) {
+    if (g.view === 'tower') { towerActive = false; towerWords = []; renderTower(); }
+    else if (g.view === 'magic8') { magic8Shaking = false; renderMagic8(); }
+    else if (g.view === 'reaction') { rxState = 'idle'; renderReaction(); }
+    showView(g.view);
+    return;
+  }
   const title = document.getElementById('arcadeGameTitle');
   if (title) title.textContent = g.icon + ' ' + g.name;
   const iframe = document.getElementById('arcadeIframe');
@@ -1986,33 +1932,13 @@ function init() {
     showView('game');
   });
 
-  // Tower of Words
-  $('#towerPlayBtn').addEventListener('click', () => {
-    showView('tower');
-    towerActive = false;
-    towerWords = [];
-    renderTower();
-  });
+  // Solo game back buttons (Tower, Magic 8 Ball, Reaction Timer)
   $('#towerLeaveBtn').addEventListener('click', () => {
     if (towerTimer) { clearInterval(towerTimer); towerTimer = null; }
     towerActive = false;
     showView('lobby');
   });
-
-  // Magic 8 Ball
-  $('#magic8Btn').addEventListener('click', () => {
-    showView('magic8');
-    magic8Shaking = false;
-    renderMagic8();
-  });
   $('#magic8LeaveBtn').addEventListener('click', () => showView('lobby'));
-
-  // Reaction Timer
-  $('#reactionBtn').addEventListener('click', () => {
-    showView('reaction');
-    rxState = 'idle';
-    renderReaction();
-  });
   $('#reactionLeaveBtn').addEventListener('click', () => {
     if (rxTimeout) { clearTimeout(rxTimeout); rxTimeout = null; }
     rxState = 'idle';
